@@ -172,7 +172,7 @@ struct request {
 	 * completion_data share space with the rb_node.
 	 */
 	union {
-		struct rb_node rb_node;	/* sort/lookup */
+		struct rb_node rb_node;	/* sort/lookup *///req靠rb_node插入bfqq 调度器的红黑树
 		struct bio_vec special_vec;
 		void *completion_data;
 		int error_count; /* for legacy drivers, don't use */
@@ -186,8 +186,10 @@ struct request {
 	 */
 	union {
 		struct {
+            //新的req插入时，bfq_init_rq()中icq_to_bic(rq->elv.icq)由icq得到struct bfq_io_cq *bic
 			struct io_cq		*icq;
-			void			*priv[2];
+            //bfq_init_rq()新的req插入时，先查找rq->elv.priv[1]中是否有bfqq，有的话直接从取出返回，否则才会分配新的bfqq
+			void			*priv[2];//bfq_init_rq()中rq->elv.priv[0] = bic;rq->elv.priv[1] = bfqq;
 		} elv;
 
 		struct {

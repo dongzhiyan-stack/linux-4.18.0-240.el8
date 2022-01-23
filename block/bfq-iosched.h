@@ -51,20 +51,37 @@ struct bfq_entity;
  * bfq_service_tree.  All the fields are protected by the queue lock
  * of the containing bfqd.
  */
+//bfq_sched_data、bfq_service_tree、bfq_entity 3者关系见bfq_entity_service_tree()
 struct bfq_service_tree {
 	/* tree for active entities (i.e., those backlogged) */
+    
+    /*1:bfqq的active属性的entity都是插入这个active这个红黑树。并且bfq_sched_data的in_service_entity和next_in_service指向的entity都是active
+     的entity
+    */
 	struct rb_root active;
 	/* tree for idle entities (i.e., not backlogged, with V < F_i)*/
-	struct rb_root idle;
+	struct rb_root idle;//bfq_idle_insert()把entity插入idle链表
 
 	/* idle entity with minimum F_i */
-	struct bfq_entity *first_idle;
-	/* idle entity with maximum F_i */
+    //st->idle红黑树的最左边的entiry的finish最小，最右边的entity的finish最大。st->first_idle记录entity->finish最小的entity，
+    //就是st->idle红黑树最靠左的entity.    //st->last_idle记录entity->finish最大的entity，就是st->idle红黑树最靠右的entity
+	struct bfq_entity *first_idle;//bfq_idle_extract()或bfq_idle_insert()中赋值
+	/* idle entity with maximum F_i *///bfq_idle_extract()或bfq_idle_insert()中赋值
 	struct bfq_entity *last_idle;
 
 	/* scheduler virtual time */
+    
+    /*st->vtime是整个调度器的虚拟运行时间，st->vtime是累加bfq_bfqq_served()累计待派发req的配额served除以st->wsum。而struct bfq_entity *
+    entity->finish是bfq_calc_finish()中根据派发req的配额除以entity->weight计算entity虚拟运行时间，然后entity->finish=entity->start+
+    entity虚拟运行时间。st->vtime、entity->start、entity->finish单位一样，都是虚拟运行时间，一个是整个调度器的，一个是entity的*/
+     
+    //调度器st虚拟运行时间,与entity->start和entity->finish单位一样,bfq_bfqq_served()中累加待派发req的配额served除以st->wsum算出的
+    //虚拟运行时间。
 	u64 vtime;
+	
 	/* scheduler weight sum; active and idle entities contribute to it */
+    //调度器st的active和tree上所有entity的权重之和，bfq_forget_entity()中从st剔除entity时，wsum减去该entity的权重entity->weight
+    //__bfq_activate_entity()中把entiry加入调度器时，wsum再累加entity->weight
 	unsigned long wsum;
 };
 
@@ -97,13 +114,14 @@ struct bfq_service_tree {
  *
  * All fields are protected by the lock of the containing bfqd.
  */
-struct bfq_sched_data {
+//bfq_sched_data和bfq_service_tree其实差别不大，bfq_sched_data包含不同调度策略的bfq_service_tree
+struct bfq_sched_data {//bfq_sched_data、bfq_service_tree、bfq_entity 3者关系见bfq_entity_service_tree()
 	/* entity in service */
-	struct bfq_entity *in_service_entity;
+	struct bfq_entity *in_service_entity;//in_service_entity是当前sd正在使用的entity，bfq_get_next_queue()
 	/* head-of-line entity (see comments above) */
-	struct bfq_entity *next_in_service;
+	struct bfq_entity *next_in_service;//next_in_service是下一次sd要使用的entity,，bfq_get_next_queue()
 	/* array of service trees, one per ioprio_class */
-	struct bfq_service_tree service_tree[BFQ_IOPRIO_CLASSES];
+	struct bfq_service_tree service_tree[BFQ_IOPRIO_CLASSES];//从这里取出bfq_service_tree
 	/* last time CLASS_IDLE was served */
 	unsigned long bfq_class_idle_last_service;
 
@@ -149,7 +167,8 @@ struct bfq_weight_counter {
  * guaranteed.  All the fields are protected by the queue lock of the
  * containing bfqd.
  */
-struct bfq_entity {
+//bfq_get_queue->bfq_init_entity()中对bfqq的bfq_entity初始化
+struct bfq_entity {//bfq_sched_data、bfq_service_tree、bfq_entity 3者关系见bfq_entity_service_tree()
 	/* service_tree member */
 	struct rb_node rb_node;
 
@@ -160,10 +179,13 @@ struct bfq_entity {
 	bool on_st_or_in_serv;
 
 	/* B-WF2Q+ start and finish timestamps [sectors/weight] */
-	u64 start, finish;
+    //bfq_calc_finish()中根据派发req的配额除以entity->weight计算entity虚拟运行时间，然后entity->finish=entity->start+entity虚拟运行时间,
+    //bfq_insert()中把entity按照entity->finish插入st->idle或者st->active 树，entity正是根据entity->finish插入st->idle或st->active红黑树，
+    //entity->finish越小越往红黑树左边插入
+    u64 start, finish;//entity虚拟运行时间，与"entiry传输字节数/weight" 有关。__bfq_activate_entity()中更新start。
 
 	/* tree the entity is enqueued into; %NULL if not on a tree */
-	struct rb_root *tree;
+	struct rb_root *tree;//指向entity所属st->active或st->idle 红黑树root节点，见bfq_insert()
 
 	/*
 	 * minimum start time of the (active) subtree rooted at this
@@ -172,16 +194,16 @@ struct bfq_entity {
 	u64 min_start;
 
 	/* amount of service received during the last service slot */
-	int service;
+	int service;//bfqq或者entity已经消耗的配额,bfq_bfqq_served()中累加派发req的配额
 
 	/* budget, used also to calculate F_i: F_i = S_i + @budget / @weight */
-	int budget;
+	int budget;//bfqq或者entity的总配额
 
 	/* device weight, if non-zero, it overrides the default weight of
 	 * bfq_group_data */
 	int dev_weight;
 	/* weight of the queue */
-	int weight;
+	int weight;//bfqq权重
 	/* next weight if a change is in progress */
 	int new_weight;
 
@@ -197,7 +219,7 @@ struct bfq_entity {
 	 */
 	struct bfq_sched_data *my_sched_data;
 	/* the scheduler queue this entity belongs to */
-	struct bfq_sched_data *sched_data;
+	struct bfq_sched_data *sched_data;//entity所属调度队列结构bfq_sched_data
 
 	/* flag, set to request a weight, ioprio or ioprio_class change  */
 	int prio_changed;
@@ -234,6 +256,7 @@ struct bfq_ttime {
  * destruction).
  * All the fields are protected by the queue lock of the containing bfqd.
  */
+//bfq_init_bfqq()中分配bfqq并对bfqq大部分成员赋值，
 struct bfq_queue {
 	/* reference counter */
 	int ref;
@@ -241,7 +264,7 @@ struct bfq_queue {
 	struct bfq_data *bfqd;
 
 	/* current ioprio and ioprio class */
-	unsigned short ioprio, ioprio_class;
+	unsigned short ioprio, ioprio_class;//bfq_init_entity()中初始化
 	/* next ioprio and ioprio class if a change is in progress */
 	unsigned short new_ioprio, new_ioprio_class;
 
@@ -263,17 +286,17 @@ struct bfq_queue {
 	struct rb_root *pos_root;
 
 	/* sorted list of pending requests */
-	struct rb_root sort_list;
+	struct rb_root sort_list;//bfq_add_request()中把req添加到sort_list链表，bfq_remove_request()中从bfqq->sort_list链表剔除req
 	/* if fifo isn't expired, next request to serve */
-	struct request *next_rq;
+	struct request *next_rq;//下一次优先派发的req，bfq_remove_request()中更新
 	/* number of sync and async requests queued */
-	int queued[2];
+	int queued[2];//bfq_add_request()加1，bfq_remove_request()减1
 	/* number of requests currently allocated */
 	int allocated;
 	/* number of pending metadata requests */
 	int meta_pending;
 	/* fifo list of requests in sort_list */
-	struct list_head fifo;
+	struct list_head fifo;//__bfq_insert_request()中把req插入到该链表
 
 	/* entity representing this queue in the scheduler */
 	struct bfq_entity entity;
@@ -282,18 +305,19 @@ struct bfq_queue {
 	struct bfq_weight_counter *weight_counter;
 
 	/* maximum budget allowed from the feedback mechanism */
-	int max_budget;
+	int max_budget;//bfq_init_bfqq()中赋初值，bfq_updated_next_req()中根据bfqq->max_budget计算新的entity->budget
 	/* budget expiration (in jiffies) */
+    //bfq_init_bfqq()中赋初值。bfq_bfqq_budget_timeout()中判断bfqq->budget_timeout大于jiffies,则bfqq运行时间太长了，该bfqq要失效了
 	unsigned long budget_timeout;
 
 	/* number of requests on the dispatch list or inside driver */
-	int dispatched;
+	int dispatched;//bfq_dispatch_remove()每派发一个req则dispatched加1
 
 	/* status flags */
 	unsigned long flags;
 
 	/* node for active/idle bfqq list inside parent bfqd */
-	struct list_head bfqq_list;
+	struct list_head bfqq_list;//bfqq靠bfqq_list插入bfqq链表
 
 	/* associated @bfq_ttime struct */
 	struct bfq_ttime ttime;
@@ -316,7 +340,7 @@ struct bfq_queue {
 	unsigned int requests_within_timer;
 
 	/* pid of the process owning the queue, used for logging purposes */
-	pid_t pid;
+	pid_t pid;//bfq_init_bfqq()中赋初值
 
 	/*
 	 * Pointer to the bfq_io_cq owning the bfq_queue, set to %NULL
@@ -351,12 +375,12 @@ struct bfq_queue {
 	 * Cumulative service received from the @bfq_queue since the
 	 * last transition from idle to backlogged.
 	 */
-	unsigned long service_from_backlogged;
+	unsigned long service_from_backlogged;//bfq_bfqq_served()中待派发req的配额served
 	/*
 	 * Cumulative service received from the @bfq_queue since its
 	 * last transition to weight-raised state.
 	 */
-	unsigned long service_from_wr;
+	unsigned long service_from_wr;//bfq_bfqq_served()中待派发req的配额served
 
 	/*
 	 * Value of wr start time when switching to soft rt
@@ -525,7 +549,7 @@ struct bfq_data {
 	/* number of weight-raised busy @bfq_queues */
 	int wr_busy_queues;
 	/* number of queued requests */
-	int queued;
+	int queued;//bfq_add_request()中加1，，bfq_remove_request()减1
 	/* number of requests dispatched and waiting for completion */
 	int rq_in_driver;
 
@@ -552,10 +576,10 @@ struct bfq_data {
 	struct hrtimer idle_slice_timer;
 
 	/* bfq_queue in service */
-	struct bfq_queue *in_service_queue;
+	struct bfq_queue *in_service_queue;//bfqd当前正在使用的bfqq
 
 	/* on-disk position of the last served request */
-	sector_t last_position;
+	sector_t last_position;//bfq_update_peak_rate()等于要派发的req的结束扇区
 
 	/* position of the last served request for the in-service queue */
 	sector_t in_serv_last_pos;
@@ -589,7 +613,7 @@ struct bfq_data {
 	/* time of first rq dispatch in current observation interval (ns) */
 	u64 first_dispatch;
 	/* time of last rq dispatch in current observation interval (ns) */
-	u64 last_dispatch;
+	u64 last_dispatch;//bfq_update_peak_rate()中记录派发req的时间
 
 	/* beginning of the last budget */
 	ktime_t last_budget_start;
@@ -598,29 +622,31 @@ struct bfq_data {
 	unsigned long last_idling_start_jiffies;
 
 	/* number of samples in current observation interval */
-	int peak_rate_samples;
+	int peak_rate_samples;//bfq_update_peak_rate()中加1
 	/* num of samples of seq dispatches in current observation interval */
 	u32 sequential_samples;
 	/* total num of sectors transferred in current observation interval */
-	u64 tot_sectors_dispatched;
+	u64 tot_sectors_dispatched;//bfq_update_peak_rate()中累加派发的req的字节数
 	/* max rq size seen during current observation interval (sectors) */
 	u32 last_rq_max_size;
 	/* time elapsed from first dispatch in current observ. interval (us) */
-	u64 delta_from_first;
+	u64 delta_from_first;//bfq_update_peak_rate()是req派发
 	/*
 	 * Current estimate of the device peak rate, measured in
 	 * [(sectors/usec) / 2^BFQ_RATE_SHIFT]. The left-shift by
 	 * BFQ_RATE_SHIFT is performed to increase precision in
 	 * fixed-point calculations.
 	 */
-	u32 peak_rate;
+	u32 peak_rate;//bfq_update_rate_reset()计算peak_rate，bfq_calc_max_budget()中根据peak_rate计算bfqd->bfq_max_budget
 
 	/* maximum budget allotted to a bfq_queue before rescheduling */
 	int bfq_max_budget;
 
 	/* list of all the bfq_queues active on the device */
+    //bfq_active_insert()把entity插入st->active tree后，把entity所属bfqq插入次active_list链表
 	struct list_head active_list;
 	/* list of all the bfq_queues idle on the device */
+    //bfq_idle_insert()把entity插入st->idle tree后，把entity所属bfqq插入次idle_list链表
 	struct list_head idle_list;
 
 	/*
@@ -807,8 +833,8 @@ enum bfqq_expiration {
 					 * too long
 					 */
 	BFQQE_BUDGET_TIMEOUT,	/* budget took too long to be used */
-	BFQQE_BUDGET_EXHAUSTED,	/* budget consumed */
-	BFQQE_NO_MORE_REQUESTS,	/* the queue has no more requests */
+	BFQQE_BUDGET_EXHAUSTED,	/* budget consumed *///bfqq配额不够了
+	BFQQE_NO_MORE_REQUESTS,	/* the queue has no more requests *///bfqq没有req要传输了
 	BFQQE_PREEMPTED		/* preemption in progress */
 };
 
@@ -1001,10 +1027,10 @@ extern struct blkcg_policy blkcg_policy_bfq;
 
 /* - interface of the internal hierarchical B-WF2Q+ scheduler - */
 
-#ifdef CONFIG_BFQ_GROUP_IOSCHED
+#ifdef CONFIG_BFQ_GROUP_IOSCHED//yes
 /* both next loops stop at one of the child entities of the root group */
 #define for_each_entity(entity)	\
-	for (; entity ; entity = entity->parent)
+	for (; entity ; entity = entity->parent)//测试证实，正常使用该for循环只有一次，entity->parent是NULL
 
 /*
  * For each iteration, compute parent in advance, so as to be safe if
@@ -1068,7 +1094,7 @@ static inline void bfq_pid_to_str(int pid, char *str, int len)
 		snprintf(str, len, "SHARED-");
 }
 
-#ifdef CONFIG_BFQ_GROUP_IOSCHED
+#ifdef CONFIG_BFQ_GROUP_IOSCHED//yes
 struct bfq_group *bfqq_group(struct bfq_queue *bfqq);
 
 #define bfq_log_bfqq(bfqd, bfqq, fmt, args...)	do {			\

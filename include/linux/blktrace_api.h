@@ -8,7 +8,7 @@
 #include <uapi/linux/blktrace_api.h>
 #include <linux/list.h>
 
-#if defined(CONFIG_BLK_DEV_IO_TRACE)
+#if defined(CONFIG_BLK_DEV_IO_TRACE)//yes
 
 #include <linux/sysfs.h>
 

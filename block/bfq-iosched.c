@@ -877,16 +877,17 @@ void bfq_weights_tree_remove(struct bfq_data *bfqd,
 /*
  * Return expired entry, or NULL to just start from scratch in rbtree.
  */
+//如果bfqq->fifo链表上有req达到了派发时间则返回它
 static struct request *bfq_check_fifo(struct bfq_queue *bfqq,
 				      struct request *last)
 {
 	struct request *rq;
-
+    //bfqq->fifo链表的req达到了派发时间
 	if (bfq_bfqq_fifo_expire(bfqq))
 		return NULL;
 
 	bfq_mark_bfqq_fifo_expire(bfqq);
-
+    //选出bfqq->fifo下一个req
 	rq = rq_entry_fifo(bfqq->fifo.next);
 
 	if (rq == last || ktime_get_ns() < rq->fifo_time)
@@ -895,42 +896,48 @@ static struct request *bfq_check_fifo(struct bfq_queue *bfqq,
 	bfq_log_bfqq(bfqq->bfqd, bfqq, "check_fifo: returned %p", rq);
 	return rq;
 }
-
+//从调度器st红黑树或bfqq->sort_list或bfqq->fifo 选择下一个要派发的req
 static struct request *bfq_find_next_rq(struct bfq_data *bfqd,
 					struct bfq_queue *bfqq,
 					struct request *last)
 {
+    //要派发的req的下一个req
 	struct rb_node *rbnext = rb_next(&last->rb_node);
+    //要派发的req的上一个req
 	struct rb_node *rbprev = rb_prev(&last->rb_node);
 	struct request *next, *prev = NULL;
 
 	/* Follow expired path, else get first next available. */
+    //如果bfqq->fifo链表上有req达到了派发时间则返回它
 	next = bfq_check_fifo(bfqq, last);
 	if (next)
 		return next;
 
-	if (rbprev)
+	if (rbprev)//要派发的req的上一个req
 		prev = rb_entry_rq(rbprev);
 
-	if (rbnext)
+	if (rbnext)//要派发的req的下一个req
 		next = rb_entry_rq(rbnext);
 	else {
+        //否则从bfqq->sort_list选择下一个req
 		rbnext = rb_first(&bfqq->sort_list);
 		if (rbnext && rbnext != &last->rb_node)
 			next = rb_entry_rq(rbnext);
 	}
-
+    //选出next和prev作为一个合适的req
 	return bfq_choose_req(bfqd, next, prev, blk_rq_pos(last));
 }
 
 /* see the definition of bfq_async_charge_factor for details */
+//计算并返回传输本次req需要配额，配额以req要传输字节数为基准，同步和异步IO计算方法不一样。
 static unsigned long bfq_serv_to_charge(struct request *rq,
 					struct bfq_queue *bfqq)
 {
 	if (bfq_bfqq_sync(bfqq) || bfqq->wr_coeff > 1 ||
 	    bfq_asymmetric_scenario(bfqq->bfqd, bfqq))
-		return blk_rq_sectors(rq);
+		return blk_rq_sectors(rq);//同步IO直接返回req要传输的字节数
 
+    //异步IO是req要传输字节数乘以bfq_async_charge_factor
 	return blk_rq_sectors(rq) * bfq_async_charge_factor;
 }
 
@@ -945,6 +952,7 @@ static unsigned long bfq_serv_to_charge(struct request *rq,
  * budget for its first request, it has to go through two dispatch
  * rounds to actually get it dispatched.
  */
+//计算更新新的entity->budget，并执行bfq_requeue_bfqq()把bfqq重新插入队列
 static void bfq_updated_next_req(struct bfq_data *bfqd,
 				 struct bfq_queue *bfqq)
 {
@@ -954,7 +962,7 @@ static void bfq_updated_next_req(struct bfq_data *bfqd,
 
 	if (!next_rq)
 		return;
-
+    //bfqq是正在使用则直接反馈
 	if (bfqq == bfqd->in_service_queue)
 		/*
 		 * In order not to break guarantees, budgets cannot be
@@ -962,14 +970,21 @@ static void bfq_updated_next_req(struct bfq_data *bfqd,
 		 */
 		return;
 
+    //计算新的entity->budget
 	new_budget = max_t(unsigned long,
 			   max_t(unsigned long, bfqq->max_budget,
 				 bfq_serv_to_charge(next_rq, bfqq)),
 			   entity->service);
+    
 	if (entity->budget != new_budget) {
+        //更新新的entity->budget
 		entity->budget = new_budget;
 		bfq_log_bfqq(bfqd, bfqq, "updated next rq: new budget %lu",
 					 new_budget);
+        
+   //如果entity是调度器正在使用的entiry或entity处于st->active树,计算entity的虚拟运行时间并累加到entity->finish，把entity按照新的
+   //entity->finish插入st->active红黑树。否则计算新的entity->start，按照entity->budget计算entity的虚拟运行时间并累加到entity->finish，
+   //最后把entity按照entity->finish插入st->active tree。最后从st查找合适的entity并更新到sd->next_in_service
 		bfq_requeue_bfqq(bfqd, bfqq, false);
 	}
 }
@@ -1318,7 +1333,7 @@ end:
 static int bfq_bfqq_budget_left(struct bfq_queue *bfqq)
 {
 	struct bfq_entity *entity = &bfqq->entity;
-
+    //entity->budget是bfqq或entity总的配额，entity->service已经消耗的配额，相减bfqq或entity还剩余的配额
 	return entity->budget - entity->service;
 }
 
@@ -1869,7 +1884,7 @@ static void bfq_reset_inject_limit(struct bfq_data *bfqd,
 
 	bfqq->decrease_time_jif = jiffies;
 }
-
+//把req添加到bfqq->sort_list链表，并选择合适的req赋于bfqq->next_rq
 static void bfq_add_request(struct request *rq)
 {
 	struct bfq_queue *bfqq = RQ_BFQQ(rq);
@@ -2055,14 +2070,17 @@ static void bfq_add_request(struct request *rq)
 				bfqd->rqs_injected = false;
 		}
 	}
-
+    
+    //bfq_add_request()中把req添加到bfqq->sort_list链表
 	elv_rb_add(&bfqq->sort_list, rq);
 
 	/*
 	 * Check if this request is a better next-serve candidate.
 	 */
-	prev = bfqq->next_rq;
+	prev = bfqq->next_rq;//第一次插入req时，bfqq->next_rq是NULL，
+	//从bfqq->next_rq和rq选个一个合适的req作为下次优先派发req
 	next_rq = bfq_choose_req(bfqd, bfqq->next_rq, rq, bfqd->last_position);
+    //下次优先派发req
 	bfqq->next_rq = next_rq;
 
 	/*
@@ -2157,7 +2175,7 @@ static void bfq_deactivate_request(struct request_queue *q, struct request *rq)
 	bfqd->rq_in_driver--;
 }
 #endif
-
+//选择一个新的req作为bfqq->next_rq，计算更新新的entity->budget，把req从bfqq->sort_list链表剔除
 static void bfq_remove_request(struct request_queue *q,
 			       struct request *rq)
 {
@@ -2165,15 +2183,21 @@ static void bfq_remove_request(struct request_queue *q,
 	struct bfq_data *bfqd = bfqq->bfqd;
 	const int sync = rq_is_sync(rq);
 
+    //如果要派发的req是bfqq->next_rq，则要选择一个新的bfqq->next_rq
 	if (bfqq->next_rq == rq) {
+        //从调度器st红黑树或bfqq->sort_list或bfqq->fifo 选择下一个要派发的req
 		bfqq->next_rq = bfq_find_next_rq(bfqd, bfqq, rq);
+        //计算更新新的entity->budget，并执行bfq_requeue_bfqq()把bfqq重新插入队列
 		bfq_updated_next_req(bfqd, bfqq);
 	}
 
 	if (rq->queuelist.prev != &rq->queuelist)
 		list_del_init(&rq->queuelist);
+
+    //派发一个req少一个，bfqq->queued[sync]和bfqd->queued减1
 	bfqq->queued[sync]--;
 	bfqd->queued--;
+    //req从bfqq->sort_list链表剔除
 	elv_rb_del(&bfqq->sort_list, rq);
 
 	elv_rqhash_del(q, rq);
@@ -2956,6 +2980,8 @@ static struct bfq_queue *bfq_set_in_service_queue(struct bfq_data *bfqd)
 {
 	struct bfq_queue *bfqq = bfq_get_next_queue(bfqd);
 
+    //核心是取出sd->next_in_service赋于sd->in_service_entity作为马上要使用的entity，这就是新选择的bfq_queue的entity。最后从st查找合适的
+    //entity并更新到sd->next_in_service，没有找到则设置sd->next_in_service为NULL
 	__bfq_set_in_service_queue(bfqd, bfqq);
 	return bfqq;
 }
@@ -3041,7 +3067,7 @@ static void bfq_reset_rate_computation(struct bfq_data *bfqd,
 		bfqd->peak_rate_samples, bfqd->sequential_samples,
 		bfqd->tot_sectors_dispatched);
 }
-
+//该函数经过负责的计算最终得到bfqd->peak_rate
 static void bfq_update_rate_reset(struct bfq_data *bfqd, struct request *rq)
 {
 	u32 rate, weight, divisor;
@@ -3183,6 +3209,7 @@ reset_computation:
  * of the observed dispatch rate. The function assumes to be invoked
  * on every request dispatch.
  */
+//核心是计算得到bfqd->peak_rate，bfq_calc_max_budget()中根据bfqd->peak_rate计算bfqd->bfq_max_budget
 static void bfq_update_peak_rate(struct bfq_data *bfqd, struct request *rq)
 {
 	u64 now_ns = ktime_get_ns();
@@ -3218,6 +3245,7 @@ static void bfq_update_peak_rate(struct bfq_data *bfqd, struct request *rq)
 	    && !BFQ_RQ_SEEKY(bfqd, bfqd->last_position, rq))
 		bfqd->sequential_samples++;
 
+    //累加派发的req的字节数
 	bfqd->tot_sectors_dispatched += blk_rq_sectors(rq);
 
 	/* Reset max observed rq size every 32 dispatches */
@@ -3234,17 +3262,23 @@ static void bfq_update_peak_rate(struct bfq_data *bfqd, struct request *rq)
 		goto update_last_values;
 
 update_rate_and_reset:
+    //该函数经过负责的计算最终得到bfqd->peak_rate
 	bfq_update_rate_reset(bfqd, rq);
 update_last_values:
+
+    //req的结束扇区
 	bfqd->last_position = blk_rq_pos(rq) + blk_rq_sectors(rq);
 	if (RQ_BFQQ(rq) == bfqd->in_service_queue)
 		bfqd->in_serv_last_pos = bfqd->last_position;
+
+    //派发req的时间
 	bfqd->last_dispatch = now_ns;
 }
 
 /*
  * Remove request from internal lists.
  */
+//计算新的bfqd->peak_rate，并选择一个新的req作为bfqq->next_rq，计算更新新的entity->budget，把req从bfqq->sort_list链表剔除
 static void bfq_dispatch_remove(struct request_queue *q, struct request *rq)
 {
 	struct bfq_queue *bfqq = RQ_BFQQ(rq);
@@ -3262,8 +3296,10 @@ static void bfq_dispatch_remove(struct request_queue *q, struct request *rq)
 	 * happens to be taken into account.
 	 */
 	bfqq->dispatched++;
+    //核心是计算得到bfqd->peak_rate，bfq_calc_max_budget()中根据bfqd->peak_rate计算bfqd->bfq_max_budget
 	bfq_update_peak_rate(q->elevator->elevator_data, rq);
-
+    
+    //选择一个新的req作为bfqq->next_rq，计算更新新的entity->budget，把req从bfqq->sort_list链表剔除
 	bfq_remove_request(q, rq);
 }
 
@@ -3467,7 +3503,8 @@ static bool idling_needed_for_service_guarantees(struct bfq_data *bfqd,
 		 bfqq->dispatched + 4)) ||
 		bfq_asymmetric_scenario(bfqd, bfqq);
 }
-
+//bfqq的entity配额被消耗光了，bfqq的entity会从st->active或st->idle 树被踢掉。接着计算entity的虚拟运行时间并更新到entity->finish，
+//把entity重新加入st->active树。如果bfqq不会再被调度，可能把entity及bfqq释放掉。
 static bool __bfq_bfqq_expire(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 			      enum bfqq_expiration reason)
 {
@@ -3504,9 +3541,13 @@ static bool __bfq_bfqq_expire(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 			 * the weight-raising mechanism.
 			 */
 			bfqq->budget_timeout = jiffies;
-
+      //1:把entity从st->active或st->idle红黑树踢掉，ins_into_idle_tree为true则把entity再插入st->idle树，否则直接释放掉entity及bfqq。
+      //2:计算entity的虚拟运行时间并累加到entity->finish，最后把entity按照新的entity->finish插入st->active红黑树
 		bfq_del_bfqq_busy(bfqd, bfqq, true);
 	} else {
+	//如果entity是调度器正在使用的entiry或entity处于st->active树,计算entity的虚拟运行时间并累加到entity->finish，把entity按照新的
+    //entity->finish插入st->active红黑树。否则计算新的entity->start，按照entity->budget计算entity的虚拟运行时间并累加到entity->finish，
+    //最后把entity按照entity->finish插入st->active tree。最后从st查找合适的entity并更新到sd->next_in_service
 		bfq_requeue_bfqq(bfqd, bfqq, true);
 		/*
 		 * Resort priority tree of potential close cooperators.
@@ -3914,6 +3955,8 @@ static unsigned long bfq_bfqq_softrt_next_start(struct bfq_data *bfqd,
  * former on a timeslice basis, without violating service domain
  * guarantees among the latter.
  */
+//bfqq的entity配额被消耗光了，bfqq的entity会从st->active或st->idle树被踢掉。接着计算entity的虚拟运行时间并更新到entity->finish，
+//把entity重新加入st->active树。如果bfqq不会再被调度，可能把entity及bfqq释放掉。
 void bfq_bfqq_expire(struct bfq_data *bfqd,
 		     struct bfq_queue *bfqq,
 		     bool compensate,
@@ -4014,6 +4057,9 @@ void bfq_bfqq_expire(struct bfq_data *bfqd,
 	 * reason.
 	 */
 	__bfq_bfqq_recalc_budget(bfqd, bfqq, reason);
+    
+  //bfqq的entity配额被消耗光了，bfqq的entity会从st->active或st->idle 树被踢掉。接着计算entity的虚拟运行时间并更新到entity->finish，
+  //把entity重新加入st->active树。如果bfqq不会再被调度，可能把entity及bfqq释放掉。
 	if (__bfq_bfqq_expire(bfqd, bfqq, reason))
 		/* bfqq is gone, no more actions on it */
 		return;
@@ -4341,13 +4387,15 @@ bfq_choose_bfqq_for_injection(struct bfq_data *bfqd)
  * Select a queue for service.  If we have a current queue in service,
  * check whether to continue servicing it, or retrieve and set a new one.
  */
+//1:如果bfqd->in_service_queue指向的bfqq为NULL，或者这个bfqq上没有要派发的req则选择一个新的bfqq。2:bfqd->in_service_queue
+//指向bfqq如果配额足够则返回它。3:如果这个bfqq的配额被效果光了则也选择一个新的bfqq
 static struct bfq_queue *bfq_select_queue(struct bfq_data *bfqd)
 {
 	struct bfq_queue *bfqq;
 	struct request *next_rq;
 	enum bfqq_expiration reason = BFQQE_BUDGET_TIMEOUT;
 
-	bfqq = bfqd->in_service_queue;
+	bfqq = bfqd->in_service_queue;//第一次bfqd->in_service_queue是NULL，直接goto new_queue
 	if (!bfqq)
 		goto new_queue;
 
@@ -4371,12 +4419,15 @@ check_queue:
 	 * than to return NULL and trigger a new dispatch to get a
 	 * request served.
 	 */
-	next_rq = bfqq->next_rq;
+	
+	next_rq = bfqq->next_rq;//选选择优先派发的req
 	/*
 	 * If bfqq has requests queued and it has enough budget left to
 	 * serve them, keep the queue, otherwise expire it.
 	 */
 	if (next_rq) {
+        //bfq_serv_to_charge()是计算并返回传输本次req需要配额，bfq_bfqq_budget_left()是该bfqq还剩余的配额。前者大于后者，说明
+        //bfqq的配额不够了，则要是bfqq失效，选择新的bfqq
 		if (bfq_serv_to_charge(next_rq, bfqq) >
 			bfq_bfqq_budget_left(bfqq)) {
 			/*
@@ -4525,10 +4576,16 @@ check_queue:
 		goto keep_queue;
 	}
 
-	reason = BFQQE_NO_MORE_REQUESTS;
+	reason = BFQQE_NO_MORE_REQUESTS;//bfqq没有req要传输了
+	
 expire:
+    
+//bfqq的entity配额被消耗光了，bfqq的entity会从st->active或st->idle树被踢掉。接着计算entity的虚拟运行时间并更新到entity->finish，
+//把entity重新加入st->active树。如果bfqq不会再被调度，可能把entity及bfqq释放掉。    
 	bfq_bfqq_expire(bfqd, bfqq, false, reason);
 new_queue:
+//核心是取出sd->next_in_service赋于sd->in_service_entity作为马上要使用的entity，这就是新选择的bfq_queue的entity。最后从st查找合适的
+//entity并更新到sd->next_in_service，没有找到则设置sd->next_in_service为NULL
 	bfqq = bfq_set_in_service_queue(bfqd);
 	if (bfqq) {
 		bfq_log_bfqq(bfqd, bfqq, "select_queue: checking new queue");
@@ -4599,23 +4656,29 @@ static void bfq_update_wr_data(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 /*
  * Dispatch next request from bfqq.
  */
+//计算并返回传输本次req需要配额served。根据本次传输req的配额served，增加entity配额entity->service和调度器虚拟运行时间st->vtime。
+//计算新的bfqd->peak_rate，并选择一个新的req作为bfqq->next_rq，计算更新新的entity->budget，把req从bfqq->sort_list链表剔除。
+//如果bfqq的entity配额被消耗光了，还有概率执行bfq_bfqq_expire()令bfqq失效
 static struct request *bfq_dispatch_rq_from_bfqq(struct bfq_data *bfqd,
 						 struct bfq_queue *bfqq)
 {
 	struct request *rq = bfqq->next_rq;
 	unsigned long service_to_charge;
-
+    
+    //计算并返回本次传输req需要配额，配额以req要传输字节数为基准，同步和异步IO计算方法不一样。
 	service_to_charge = bfq_serv_to_charge(rq, bfqq);
-
+    
+    //根据本次传输req的配额served，增加entity配额entity->service和调度器虚拟运行时间st->vtime
 	bfq_bfqq_served(bfqq, service_to_charge);
 
 	if (bfqq == bfqd->in_service_queue && bfqd->wait_dispatch) {
 		bfqd->wait_dispatch = false;
 		bfqd->waited_rq = rq;
 	}
-
+    //计算新的bfqd->peak_rate，并选择一个新的req作为bfqq->next_rq，计算更新新的entity->budget，把req从bfqq->sort_list链表剔除
 	bfq_dispatch_remove(bfqd->queue, rq);
 
+    //bfqq不是正在使用的
 	if (bfqq != bfqd->in_service_queue)
 		goto return_rq;
 
@@ -4639,7 +4702,9 @@ static struct request *bfq_dispatch_rq_from_bfqq(struct bfq_data *bfqd,
 	 */
 	if (!(bfq_tot_busy_queues(bfqd) > 1 && bfq_class_idle(bfqq)))
 		goto return_rq;
-
+    
+  //bfqq的entity配额被消耗光了，bfqq的entity会从st->active或st->idle树被踢掉。接着计算entity的虚拟运行时间并更新到entity->finish，
+  //把entity重新加入st->active树。如果bfqq不会再被调度，可能把entity及bfqq释放掉。
 	bfq_bfqq_expire(bfqd, bfqq, false, BFQQE_BUDGET_EXHAUSTED);
 
 return_rq:
@@ -4664,7 +4729,7 @@ static struct request *__bfq_dispatch_request(struct blk_mq_hw_ctx *hctx)
 	struct request *rq = NULL;
 	struct bfq_queue *bfqq = NULL;
 
-	if (!list_empty(&bfqd->dispatch)) {
+	if (!list_empty(&bfqd->dispatch)) {//测试时bfqd->dispatch链表非空，if不成立
 		rq = list_first_entry(&bfqd->dispatch, struct request,
 				      queuelist);
 		list_del_init(&rq->queuelist);
@@ -4729,11 +4794,16 @@ static struct request *__bfq_dispatch_request(struct blk_mq_hw_ctx *hctx)
 	 */
 	if (bfqd->strict_guarantees && bfqd->rq_in_driver > 0)
 		goto exit;
-
+    
+//1:如果bfqd->in_service_queue指向的bfqq为NULL，或者这个bfqq上没有要派发的req则选择一个新的bfqq。2:bfqd->in_service_queue
+//指向bfqq如果配额足够则返回它。3:如果这个bfqq的配额被效果光了，则先令bfqq失效，接着也选择一个新的bfqq
 	bfqq = bfq_select_queue(bfqd);
 	if (!bfqq)
 		goto exit;
-
+    
+  //计算并返回传输本次req需要配额served。根据本次传输req的配额served，增加entity配额entity->service和调度器虚拟运行时间st->vtime。
+  //计算新的bfqd->peak_rate，并选择一个新的req作为bfqq->next_rq，计算更新新的entity->budget，把req从bfqq->sort_list链表剔除。
+  //如果bfqq的entity配额被消耗光了，还有概率执行bfq_bfqq_expire()令bfqq失效
 	rq = bfq_dispatch_rq_from_bfqq(bfqd, bfqq);
 
 	if (rq) {
@@ -4830,6 +4900,7 @@ static struct request *bfq_dispatch_request(struct blk_mq_hw_ctx *hctx)
  * Scheduler lock must be held here. Recall not to use bfqq after calling
  * this function on it.
  */
+//entity不再被用到，释放bfqq,把entity剔除掉
 void bfq_put_queue(struct bfq_queue *bfqq)
 {
 	struct bfq_queue *item;
@@ -5130,7 +5201,7 @@ static struct bfq_queue **bfq_async_queue_prio(struct bfq_data *bfqd,
 		return NULL;
 	}
 }
-
+//针对异步或者同步IO分配bfqq，并初始化bfqq和entity
 static struct bfq_queue *bfq_get_queue(struct bfq_data *bfqd,
 				       struct bio *bio, bool is_sync,
 				       struct bfq_io_cq *bic)
@@ -5142,7 +5213,7 @@ static struct bfq_queue *bfq_get_queue(struct bfq_data *bfqd,
 	struct bfq_group *bfqg;
 
 	rcu_read_lock();
-
+    //得到了struct bfq_group *bfqg
 	bfqg = bfq_find_set_group(bfqd, __bio_blkcg(bio));
 	if (!bfqg) {
 		bfqq = &bfqd->oom_bfqq;
@@ -5150,20 +5221,23 @@ static struct bfq_queue *bfq_get_queue(struct bfq_data *bfqd,
 	}
 
 	if (!is_sync) {
+        //异步IO时，从这里得到一个新的异步bfqq
 		async_bfqq = bfq_async_queue_prio(bfqd, bfqg, ioprio_class,
 						  ioprio);
 		bfqq = *async_bfqq;
 		if (bfqq)
 			goto out;
 	}
-
+    //同步IO，在这里分配一个新的同步 bfqq
 	bfqq = kmem_cache_alloc_node(bfq_pool,
 				     GFP_NOWAIT | __GFP_ZERO | __GFP_NOWARN,
 				     bfqd->queue->node);
 
 	if (bfqq) {
+        //bfqq初始化
 		bfq_init_bfqq(bfqd, bfqq, bic, current->pid,
 			      is_sync);
+        //bfqq的entity初始化
 		bfq_init_entity(&bfqq->entity, bfqg);
 		bfq_log_bfqq(bfqd, bfqq, "allocated");
 	} else {
@@ -5362,7 +5436,7 @@ static void bfq_rq_enqueued(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 
 	bfqq->last_request_pos = blk_rq_pos(rq) + blk_rq_sectors(rq);
 
-	if (bfqq == bfqd->in_service_queue && bfq_bfqq_wait_request(bfqq)) {
+	if (bfqq == bfqd->in_service_queue && bfq_bfqq_wait_request(bfqq)) {//这个if实测没成立
 		bool small_req = bfqq->queued[rq_is_sync(rq)] == 1 &&
 				 blk_rq_sectors(rq) < 32;
 		bool budget_timeout = bfq_bfqq_budget_timeout(bfqq);
@@ -5409,7 +5483,7 @@ static void bfq_rq_enqueued(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 					BFQQE_BUDGET_TIMEOUT);
 	}
 }
-
+//req插入bfqq->sort_list和bfqq->fifo链表，并选择设置下一次派发的req于bfqq->next_rq
 /* returns true if it causes the idle timer to be disabled */
 static bool __bfq_insert_request(struct bfq_data *bfqd, struct request *rq)
 {
@@ -5417,7 +5491,7 @@ static bool __bfq_insert_request(struct bfq_data *bfqd, struct request *rq)
 		*new_bfqq = bfq_setup_cooperator(bfqd, bfqq, rq, true);
 	bool waiting, idle_timer_disabled = false;
 
-	if (new_bfqq) {
+	if (new_bfqq) {//new_bfqq大部分时间貌似是NULL
 		/*
 		 * Release the request's reference to the old bfqq
 		 * and make sure one is taken to the shared queue.
@@ -5452,10 +5526,12 @@ static bool __bfq_insert_request(struct bfq_data *bfqd, struct request *rq)
 	bfq_update_io_seektime(bfqd, bfqq, rq);
 
 	waiting = bfqq && bfq_bfqq_wait_request(bfqq);
+    //把req添加到bfqq->sort_list链表，并选择合适的req赋于bfqq->next_rq
 	bfq_add_request(rq);
 	idle_timer_disabled = waiting && !bfq_bfqq_wait_request(bfqq);
 
 	rq->fifo_time = ktime_get_ns() + bfqd->bfq_fifo_expire[rq_is_sync(rq)];
+    //req插入bfqq->fifo链表，超时派发
 	list_add_tail(&rq->queuelist, &bfqq->fifo);
 
 	bfq_rq_enqueued(bfqd, bfqq, rq);
@@ -5494,7 +5570,7 @@ static inline void bfq_update_insert_stats(struct request_queue *q,
 					   bool idle_timer_disabled,
 					   unsigned int cmd_flags) {}
 #endif /* CONFIG_BFQ_CGROUP_DEBUG */
-
+//先查找或分配bfqq，并把req插入bfqq->sort_list和bfqq->fifo链表，选择设置下一次派发的req于bfqq->next_rq
 static void bfq_insert_request(struct blk_mq_hw_ctx *hctx, struct request *rq,
 			       bool at_head)
 {
@@ -5515,13 +5591,15 @@ static void bfq_insert_request(struct blk_mq_hw_ctx *hctx, struct request *rq,
 	blk_mq_sched_request_inserted(rq);
 
 	spin_lock_irq(&bfqd->lock);
+    //先查找rq->elv.priv[1]中是否有bfqq,有的话直接从取出返回。再尝试通过bic->bfqq[is_sync]得到bfqq，失败则针对异步或者同步IO分配新的bfqq并初始化
 	bfqq = bfq_init_rq(rq);
-	if (!bfqq || at_head || blk_rq_is_passthrough(rq)) {
+	if (!bfqq || at_head || blk_rq_is_passthrough(rq)) {//这个if测试不成立
 		if (at_head)
 			list_add(&rq->queuelist, &bfqd->dispatch);
 		else
 			list_add_tail(&rq->queuelist, &bfqd->dispatch);
 	} else {
+	    //req插入bfqq->sort_list和bfqq->fifo链表，并选择设置下一次派发的req于bfqq->next_rq
 		idle_timer_disabled = __bfq_insert_request(bfqd, rq);
 		/*
 		 * Update bfqq, because, if a queue merge has occurred
@@ -5553,11 +5631,12 @@ static void bfq_insert_request(struct blk_mq_hw_ctx *hctx, struct request *rq,
 static void bfq_insert_requests(struct blk_mq_hw_ctx *hctx,
 				struct list_head *list, bool at_head)
 {
-	while (!list_empty(list)) {
+	while (!list_empty(list)) {//list上可能有多个req
 		struct request *rq;
 
 		rq = list_first_entry(list, struct request, queuelist);
 		list_del_init(&rq->queuelist);
+        //先查找或分配bfqq，并把req插入bfqq->sort_list和bfqq->fifo链表，选择设置下一次派发的req于bfqq->next_rq
 		bfq_insert_request(hctx, rq, at_head);
 	}
 }
@@ -6008,15 +6087,17 @@ bfq_split_bfqq(struct bfq_io_cq *bic, struct bfq_queue *bfqq)
 	bfq_release_process_ref(bfqq->bfqd, bfqq);
 	return NULL;
 }
-
+//先尝试通过bic->bfqq[is_sync]得到bfqq，失败则针对异步或者同步IO分配新的bfqq并初始化
 static struct bfq_queue *bfq_get_bfqq_handle_split(struct bfq_data *bfqd,
 						   struct bfq_io_cq *bic,
 						   struct bio *bio,
 						   bool split, bool is_sync,
 						   bool *new_queue)
 {
+    //由bic得到bfqq
 	struct bfq_queue *bfqq = bic_to_bfqq(bic, is_sync);
 
+    //由bic得到的bfqq存在直接返回bfqq
 	if (likely(bfqq && bfqq != &bfqd->oom_bfqq))
 		return bfqq;
 
@@ -6025,6 +6106,8 @@ static struct bfq_queue *bfq_get_bfqq_handle_split(struct bfq_data *bfqd,
 
 	if (bfqq)
 		bfq_put_queue(bfqq);
+
+    //针对异步或者同步IO分配bfqq，并初始化bfqq和entity
 	bfqq = bfq_get_queue(bfqd, bio, is_sync, bic);
 
 	bic_set_bfqq(bic, bfqq, is_sync);
@@ -6111,6 +6194,7 @@ static void bfq_prepare_request(struct request *rq, struct bio *bio)
  * rq after rq has been inserted or merged. So, it is safe to execute
  * these preparation operations when rq is finally inserted or merged.
  */
+//先查找rq->elv.priv[1]中是否有bfqq,有的话直接从取出返回。再尝试通过bic->bfqq[is_sync]得到bfqq，失败则针对异步或者同步IO分配新的bfqq并初始化
 static struct bfq_queue *bfq_init_rq(struct request *rq)
 {
 	struct request_queue *q = rq->q;
@@ -6132,6 +6216,7 @@ static struct bfq_queue *bfq_init_rq(struct request *rq)
 	 * events, a request cannot be manipulated any longer before
 	 * being removed from bfq.
 	 */
+	//新的req插入时，先查找rq->elv.priv[1]中是否有bfqq，有的话直接从取出返回，否则才会分配新的bfqq
 	if (rq->elv.priv[1])
 		return rq->elv.priv[1];
 
@@ -6141,6 +6226,7 @@ static struct bfq_queue *bfq_init_rq(struct request *rq)
 
 	bfq_bic_update_cgroup(bic, bio);
 
+    //先尝试通过bic->bfqq[is_sync]得到bfqq，失败则针对异步或者同步IO分配新的bfqq并初始化
 	bfqq = bfq_get_bfqq_handle_split(bfqd, bic, bio, false, is_sync,
 					 &new_queue);
 
@@ -6169,9 +6255,9 @@ static struct bfq_queue *bfq_init_rq(struct request *rq)
 	bfqq->ref++;
 	bfq_log_bfqq(bfqd, bfqq, "get_request %p: bfqq %p, %d",
 		     rq, bfqq, bfqq->ref);
-
-	rq->elv.priv[0] = bic;
-	rq->elv.priv[1] = bfqq;
+  
+	rq->elv.priv[0] = bic;//rq->elv.priv[0]指向bic
+	rq->elv.priv[1] = bfqq;//rq->elv.priv[1]指向bfqq
 
 	/*
 	 * If a bfq_queue has only one process reference, it is owned
@@ -6797,8 +6883,8 @@ static struct elevator_type iosched_bfq_mq = {
 		.requeue_request        = bfq_finish_requeue_request,
 		.finish_request		= bfq_finish_requeue_request,
 		.exit_icq		= bfq_exit_icq,
-		.insert_requests	= bfq_insert_requests,
-		.dispatch_request	= bfq_dispatch_request,
+		.insert_requests	= bfq_insert_requests,//插入req
+		.dispatch_request	= bfq_dispatch_request,//派发req
 		.next_request		= elv_rb_latter_request,
 		.former_request		= elv_rb_former_request,
 		.allow_merge		= bfq_allow_bio_merge,

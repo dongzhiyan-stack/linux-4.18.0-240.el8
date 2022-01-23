@@ -277,7 +277,7 @@ void bfqg_stats_update_avg_queue_size(struct bfq_group *bfqg) { }
 
 #endif /* CONFIG_BFQ_CGROUP_DEBUG */
 
-#ifdef CONFIG_BFQ_GROUP_IOSCHED
+#ifdef CONFIG_BFQ_GROUP_IOSCHED//yes
 
 /*
  * blk-cgroup policy-related handlers
