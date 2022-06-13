@@ -17,6 +17,7 @@
  */
 #include "bfq-iosched.h"
 
+extern int open_bfqq_printk;
 /**
  * bfq_gt - compare two timestamps.
  * @a: first ts.
@@ -24,7 +25,7 @@
  *
  * Return @a > @b, dealing with wrapping correctly.
  */
-static int bfq_gt(u64 a, u64 b)//a>b·µ»Øtrue£¬Ç°´óÓÚºó·µ»Øtrue
+static int bfq_gt(u64 a, u64 b)
 {
 	return (s64)(a - b) > 0;
 }
@@ -80,10 +81,9 @@ static bool bfq_update_parent_budget(struct bfq_entity *next_in_service);
  * entity->parent may become the next_in_service for its parent
  * entity.
  */
-//´Óst²éÕÒºÏÊÊµÄentity²¢¸üĞÂµ½sd->next_in_service£¬Ã»ÓĞÕÒµ½ÔòÉèÖÃsd->next_in_serviceÎªNULL
 static bool bfq_update_next_in_service(struct bfq_sched_data *sd,
-				       struct bfq_entity *new_entity,//new_entityÓĞÊ±ÊÇNULL£¬ÓĞÊ±²»ÊÇ
-				       bool expiration)//expirationÎªtrueËµÃ÷ÊÇbfqqµ½ÆÚÁË£¬ÎªfalseËµÃ÷ÊÇÆäËûÇé¿ö£¬±ÈÈçÔÚbfq_update_next_in_service()
+				       struct bfq_entity *new_entity,
+				       bool expiration)
 {
 	struct bfq_entity *next_in_service = sd->next_in_service;
 	bool parent_sched_may_change = false;
@@ -107,7 +107,9 @@ static bool bfq_update_next_in_service(struct bfq_sched_data *sd,
 		 * set to true, and left as true if
 		 * sd->next_in_service is NULL.
 		 */
-		change_without_lookup = true;//ÕâÀï¸³Öµchange_without_lookup=true
+		change_without_lookup = true;
+		if(open_bfqq_printk)
+	            printk("1:%s %d %s %d new_entity:%llx if (new_entity && new_entity != sd->next_in_service)\n",__func__,__LINE__,current->comm,current->pid,(u64)new_entity);
 
 		/*
 		 * If there is already a next_in_service candidate
@@ -128,14 +130,19 @@ static bool bfq_update_next_in_service(struct bfq_sched_data *sd,
 				 &&
 				 bfq_gt(next_in_service->finish,
 					new_entity->finish));
+                        if(open_bfqq_printk)
+	                    printk("2:%s %d %s %d change_without_lookup:%d new_entity->start:%llu st->vtime:%llu next_in_service->finish:%llu new_entity->finish:%llu\n",__func__,__LINE__,current->comm,current->pid,change_without_lookup,new_entity->start,st->vtime,next_in_service->finish,new_entity->finish);
 		}
-        //°Ñ´«ÈëµÄnew_entity¸³Öµ¸ønext_in_service£¬ÏÂ±ß°Ñnew_entity·ÖÅä¸øsd->next_in_service
+
 		if (change_without_lookup)
 			next_in_service = new_entity;
 	}
 
-	if (!change_without_lookup) /* lookup needed */
-		next_in_service = bfq_lookup_next_entity(sd, expiration);//²éÕÒnext service entity£¬Ã»ÕÒµ½Ôò·µ»ØNULL
+	if (!change_without_lookup){ /* lookup needed */
+		if(open_bfqq_printk)
+			  printk("3:%s %d %s %d expiration:%d ->bfq_lookup_next_entity()\n",__func__,__LINE__,current->comm,current->pid,expiration);
+		next_in_service = bfq_lookup_next_entity(sd, expiration);
+	}
 
 	if (next_in_service) {
 		bool new_budget_triggers_change =
@@ -143,8 +150,13 @@ static bool bfq_update_next_in_service(struct bfq_sched_data *sd,
 
 		parent_sched_may_change = !sd->next_in_service ||
 			new_budget_triggers_change;
+		if(open_bfqq_printk)
+			  printk("4:%s %d %s %d if (next_in_service)\n",__func__,__LINE__,current->comm,current->pid);
 	}
-    //Èç¹ûÕÒ²»µ½next service entityÔòsd->next_in_service±»¸³ÖµNULL
+
+        if(open_bfqq_printk)
+	     printk("5:%s %d %s %d old sd->next_in_service entity:%llx   new sd->next_in_service entity:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)(sd->next_in_service),(u64)(next_in_service));
+
 	sd->next_in_service = next_in_service;
 
 	if (!next_in_service)
@@ -153,7 +165,7 @@ static bool bfq_update_next_in_service(struct bfq_sched_data *sd,
 	return parent_sched_may_change;
 }
 
-#ifdef CONFIG_BFQ_GROUP_IOSCHED//yes
+#ifdef CONFIG_BFQ_GROUP_IOSCHED
 
 struct bfq_group *bfq_bfqq_to_bfqg(struct bfq_queue *bfqq)
 {
@@ -215,14 +227,18 @@ static bool bfq_update_parent_budget(struct bfq_entity *next_in_service)
  * function returns true for a non-queue entity.
  */
 static bool bfq_no_longer_next_in_service(struct bfq_entity *entity)
-{//yes
+{
 	struct bfq_group *bfqg;
 
+	if(open_bfqq_printk)
+		  printk("1:%s %d %s %d entity->my_sched_data:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)(entity->my_sched_data));
 	if (bfq_entity_to_bfqq(entity))
 		return true;
 
 	bfqg = container_of(entity, struct bfq_group, entity);
 
+	if(open_bfqq_printk)
+		  printk("2:%s %d %s %d bfqg->active_entities:%d\n",__func__,__LINE__,current->comm,current->pid,bfqg->active_entities);
 	/*
 	 * The field active_entities does not always contain the
 	 * actual number of active children entities: it happens to
@@ -243,13 +259,13 @@ static bool bfq_no_longer_next_in_service(struct bfq_entity *entity)
 
 #else /* CONFIG_BFQ_GROUP_IOSCHED */
 
-struct bfq_group *bfq_bfqq_to_bfqg(struct bfq_queue *bfqq)//no
+struct bfq_group *bfq_bfqq_to_bfqg(struct bfq_queue *bfqq)
 {
 	return bfqq->bfqd->root_group;
 }
 
 static bool bfq_update_parent_budget(struct bfq_entity *next_in_service)
-{//no
+{
 	return false;
 }
 
@@ -285,7 +301,6 @@ struct bfq_queue *bfq_entity_to_bfqq(struct bfq_entity *entity)
  * @service: amount of service.
  * @weight: scale factor (weight of an entity or weight sum).
  */
-//serviceÊÇentityÒÑ¾­ÏûºÄµÄÅä¶î£¬³ıÒÔweightµÃµ½entityÒÑ¾­ÏûºÄµÄĞéÄâÔËĞĞÊ±¼ä
 static u64 bfq_delta(unsigned long service, unsigned long weight)
 {
 	return div64_ul((u64)service << WFQ_SERVICE_SHIFT, weight);
@@ -296,15 +311,14 @@ static u64 bfq_delta(unsigned long service, unsigned long weight)
  * @entity: the entity to act upon.
  * @service: the service to be charged to the entity.
  */
-//¸ù¾İservice/entity->weight¼ÆËãentityÒÑ¾­ÏûºÄµÄĞéÄâÔËĞĞÊ±¼ä£¬entity->start¼ÓÉÏÕâ¶ÎĞéÄâÔËĞĞÊ±¼ä¾ÍÊÇentity->finish
-static void bfq_calc_finish(struct bfq_entity *entity, unsigned long service)//serviceÊÇentity->budget»òentity->service
+static void bfq_calc_finish(struct bfq_entity *entity, unsigned long service)
 {
 	struct bfq_queue *bfqq = bfq_entity_to_bfqq(entity);
-    
-    //serviceÊÇentityÒÑ¾­ÏûºÄµÄÅä¶î£¬³ıÒÔweightµÃµ½entityÒÑ¾­ÏûºÄµÄĞéÄâÔËĞĞÊ±¼ä.entity->finishµÈÓÚentity->start¼ÓÉÏentityÒÑ¾­ÏûºÄµÄĞéÄâÔËĞĞÊ±¼ä
+
 	entity->finish = entity->start +
 		bfq_delta(service, entity->weight);
-
+        if(open_bfqq_printk)
+	     printk("%s %d %s %d entity:%llx service:%ld entity->start:%llu entity->finish:%llu entity->weight:%d bfq_delta:%llu\n",__func__,__LINE__,current->comm,current->pid,(u64)entity,service,entity->start,entity->finish,entity->weight,bfq_delta(service, entity->weight));
 	if (bfqq) {
 		bfq_log_bfqq(bfqq->bfqd, bfqq,
 			"calc_finish: serv %lu, w %d",
@@ -351,24 +365,27 @@ static void bfq_extract(struct rb_root *root, struct bfq_entity *entity)
  * @st: the service tree of the owning @entity.
  * @entity: the entity being removed.
  */
-//entity´Óst->idle treeÌŞ³ıµô£¬¿ÉÄÜ¸üĞÂst->first_idle»òst->last_idle
 static void bfq_idle_extract(struct bfq_service_tree *st,
 			     struct bfq_entity *entity)
 {
 	struct bfq_queue *bfqq = bfq_entity_to_bfqq(entity);
 	struct rb_node *next;
 
-    //entityÊÇst->first_idleÖ¸ÏòµÄentity£¬¼´st->idleºìºÚÊ÷×î×ó±ßµÄentity¡£ÒòÎªentiryÒª´Óst->idle treeÌŞ³ı£¬ÔòÑ¡ÔñentityÓÒ±ßµÄentity¸³ÓÚst->first_idle
 	if (entity == st->first_idle) {
 		next = rb_next(&entity->rb_node);
+		if(open_bfqq_printk)
+			  printk("1:%s %d %s %d entity:%llx st->first_idle entity:%llx next st->first_idle entity:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)entity,(u64)(st->first_idle),(u64)(bfq_entity_of(next)));
 		st->first_idle = bfq_entity_of(next);
 	}
-    //entityÊÇst->last_idleÖ¸ÏòµÄentity£¬¼´st->idleºìºÚÊ÷×îÓÒ±ßµÄentity¡£ÒòÎªentiryÒª´Óst->idle treeÌŞ³ı£¬ÔòÑ¡Ôñentity×ó±ßµÄentity¸³ÓÚst->last_idle
+
 	if (entity == st->last_idle) {
 		next = rb_prev(&entity->rb_node);
+	       if(open_bfqq_printk)
+			printk("2:%s %d %s %d entity:%llx st->last_idle entity:%llx  next st->last_idle entity:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)entity,(u64)(st->last_idle),(u64)(bfq_entity_of(next)));
 		st->last_idle = bfq_entity_of(next);
 	}
-    //entity´Óst->idle treeÌŞ³ıµô
+        if(open_bfqq_printk)
+	      printk("3:%s %d %s %d bfq_service_tree:%llx entity:%llx &st->idle rb_root:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)st,(u64)entity,(u64)(&st->idle));
 	bfq_extract(&st->idle, entity);
 
 	if (bfqq)
@@ -383,19 +400,19 @@ static void bfq_idle_extract(struct bfq_service_tree *st,
  * This is used for the idle and the active tree, since they are both
  * ordered by finish time.
  */
-//°Ñentity°´ÕÕentity->finish²åÈëst->idle»òÕßst->activeºìºÚÊ÷£¬entity->finishÔ½Ğ¡entityÔÚºìºÚÊ÷Ô½¿¿×ó
 static void bfq_insert(struct rb_root *root, struct bfq_entity *entity)
 {
 	struct bfq_entity *entry;
-    //st->idle»òÕßst->active Ê÷root½Úµã
 	struct rb_node **node = &root->rb_node;
 	struct rb_node *parent = NULL;
+
+        if(open_bfqq_printk)
+	     printk("%s %d %s %d rb_root root:%llx entity:%llx entity->finish:%llu\n",__func__,__LINE__,current->comm,current->pid,(u64)root,(u64)entity,entity->finish);
 
 	while (*node) {
 		parent = *node;
 		entry = rb_entry(parent, struct bfq_entity, rb_node);
-        //entity->finishĞ¡ÓÚºìºÚÊ÷½ÚµãµÄentry->finishÔòif³ÉÁ¢£¬È»ºóÈ¡³öentryµÄ×ó½Úµã¡£ÏÔÈ»£¬
-        //st->idle»òÕßst->activeºìºÚÊ÷ÖĞµÄµÄentityÊÇ°´ÕÕentity->finishÓÉĞ¡µ½´ó´Ó×óµ½ÓÒ½øĞĞÅÅĞòµÄ
+
 		if (bfq_gt(entry->finish, entity->finish))
 			node = &parent->rb_left;
 		else
@@ -404,7 +421,7 @@ static void bfq_insert(struct rb_root *root, struct bfq_entity *entity)
 
 	rb_link_node(&entity->rb_node, parent, node);
 	rb_insert_color(&entity->rb_node, root);
-    //entity->treeÖ¸Ïòst->active»òÕßst->idleÊ÷
+
 	entity->tree = root;
 }
 
@@ -418,15 +435,12 @@ static void bfq_insert(struct rb_root *root, struct bfq_entity *entity)
  * that the subtree rooted at @node (which may be its left or its right
  * child) has a valid min_start value.
  */
-//Èç¹ûµ±Ç°entityÔÚºìºÚÊ÷ÏÂ±ßµÄ×Ó½ÚµãµÄentity(¼´child)µÄmin_start¸üĞ¡£¬Ôò¸³Öµ¸øµ±Ç°entityµÄmin_start
 static void bfq_update_min(struct bfq_entity *entity, struct rb_node *node)
 {
 	struct bfq_entity *child;
 
 	if (node) {
 		child = rb_entry(node, struct bfq_entity, rb_node);
-        //entity->min_start´óÓÚchild->min_start³ÉÁ¢£¬¸üĞÂentity->min_startÎª¸üĞ¡µÄchild->min_start¡£ÕâÊÇÊ²Ã´ÓÃÒâ?childÊÇentity
-        //µÄÔÚºìºÚÊ÷ÏÂ±ßµÄ×ó½Úµã»òÕßÓÒ½Úµã£¬¼´×Ó½Úµã£¬Èç¹û×Ó½ÚµãµÄmin_start¸üĞ¡£¬¾ÍÓÃ×Ó½ÚµãµÄmin_start¸üĞÂentity->min_start
 		if (bfq_gt(entity->min_start, child->min_start))
 			entity->min_start = child->min_start;
 	}
@@ -440,16 +454,12 @@ static void bfq_update_min(struct bfq_entity *entity, struct rb_node *node)
  * this function updates its min_start value.  The left and right subtrees
  * are assumed to hold a correct min_start value.
  */
-//ÏÈ°Ñentity->start¸³Öµ¸øentity->min_start£¬Èç¹ûentityÔÚºìºÚÊ÷ÏÂ±ßµÄ×óÓÒ×Ó½ÚµãµÄentityµÄmin_start¸üĞ¡£¬ÔÙÖØĞÂ¸³Öµ¸øentity->min_start
 static void bfq_update_active_node(struct rb_node *node)
 {
 	struct bfq_entity *entity = rb_entry(node, struct bfq_entity, rb_node);
 
-    //ÓÃentity->start¸üĞÂentity->min_start
 	entity->min_start = entity->start;
-    //Èç¹ûµ±Ç°entityÔÚºìºÚÊ÷ÏÂ±ßµÄ×ó×Ó½ÚµãµÄentityµÄmin_start¸üĞ¡£¬Ôò¸³Öµ¸øµ±Ç°entityµÄmin_start
 	bfq_update_min(entity, node->rb_right);
-    //Èç¹ûµ±Ç°entityÔÚºìºÚÊ÷ÏÂ±ßµÄÓÒ×Ó½ÚµãµÄentityµÄmin_start¸üĞ¡£¬Ôò¸³Öµ¸øµ±Ç°entityµÄmin_start
 	bfq_update_min(entity, node->rb_left);
 }
 
@@ -463,24 +473,21 @@ static void bfq_update_active_node(struct rb_node *node)
  * changed in the path to the root.  The only nodes that may have changed
  * are the ones in the path or their siblings.
  */
-//´ÓentityµÄnodeËùÔÚ½Úµã£¬Ò»Ö±ÔÚºìºÚÊ÷ÏòÉÏµÃµ½ËüµÄparent½Úµã£¬¸üĞÂÕâĞ©ºìºÚÊ÷½Úµã¶ÔÓ¦µÄbfq_entityµÄ³ÉÔ±min_start£¬Í¬Ê±Ò²¸üĞÂ
-//ÕâĞ©nodeÔÚºìºÚÊ÷µÄ×óÓÒ×Ó½Úµã¶ÔÓ¦µÄentityµÄmin_start¡£Õâ¸ö¸üĞÂ²Ù×÷Ò»Ö±µ½¸ù½Úµã²Å½áÊø
 static void bfq_update_active_tree(struct rb_node *node)
 {
 	struct rb_node *parent;
 
 up:
-    //ÏÈ¸üĞÂµ±Ç°node¶ÔÓ¦µÄentityµÄmin_start
 	bfq_update_active_node(node);
 
 	parent = rb_parent(node);
-	if (!parent)//¸üĞÂentityµÄmin_start£¬Ö±µ½entityºìºÚÊ÷¸ù½Úµã²Åreturn·µ»Ø
+	if (!parent)
 		return;
-    //Èç¹ûnodeÕâ¸öentityÊÇ¸¸½ÚµãparentµÄ×ó½Úµã£¬Ôò¸üĞÂparent½ÚµãµÄÓÒ½Úµã¶ÔÓ¦µÄentityµÄmin_start
+
 	if (node == parent->rb_left && parent->rb_right)
 		bfq_update_active_node(parent->rb_right);
-	else if (parent->rb_left)//·ñÔòËµÃ÷nodeÕâ¸öentityÊÇ¸¸½ÚµãparentµÄÓÒ½Úµã£¬Ôò¸üĞÂparent½ÚµãµÄ×ó½Úµã¶ÔÓ¦µÄentityµÄmin_start
-		bfq_update_active_node(parent->rb_left);//¸üĞÂentity->min_start
+	else if (parent->rb_left)
+		bfq_update_active_node(parent->rb_left);
 
 	node = parent;
 	goto up;
@@ -497,7 +504,6 @@ up:
  * its children (and the node itself), so it's possible to search for
  * the eligible node with the lowest finish time in logarithmic time.
  */
-//°Ñentity°´ÕÕĞÂµÄentity->finish²åÈëst->activeºìºÚÊ÷
 static void bfq_active_insert(struct bfq_service_tree *st,
 			      struct bfq_entity *entity)
 {
@@ -508,7 +514,9 @@ static void bfq_active_insert(struct bfq_service_tree *st,
 	struct bfq_group *bfqg = NULL;
 	struct bfq_data *bfqd = NULL;
 #endif
-    //°Ñentity°´ÕÕentity->finish²åÈëst->activeºìºÚÊ÷£¬entity->finishÔ½Ğ¡entityÔÚºìºÚÊ÷Ô½¿¿×ó
+	if(open_bfqq_printk)
+            printk("%s %d %s %d \n",__func__,__LINE__,current->comm,current->pid);
+
 	bfq_insert(&st->active, entity);
 
 	if (node->rb_left)
@@ -516,8 +524,6 @@ static void bfq_active_insert(struct bfq_service_tree *st,
 	else if (node->rb_right)
 		node = node->rb_right;
 
-    //´ÓentityµÄnodeËùÔÚ½Úµã£¬Ò»Ö±ÔÚºìºÚÊ÷ÏòÉÏµÃµ½ËüµÄparent½Úµã£¬¸üĞÂÕâĞ©ºìºÚÊ÷½Úµã¶ÔÓ¦µÄbfq_entityµÄ³ÉÔ±min_start£¬Í¬Ê±Ò²¸üĞÂ
-    //ÕâĞ©nodeÔÚºìºÚÊ÷µÄ×óÓÒ×Ó½Úµã¶ÔÓ¦µÄentityµÄmin_start¡£Õâ¸ö¸üĞÂ²Ù×÷Ò»Ö±µ½¸ù½Úµã²Å½áÊø
 	bfq_update_active_tree(node);
 
 #ifdef CONFIG_BFQ_GROUP_IOSCHED
@@ -525,7 +531,7 @@ static void bfq_active_insert(struct bfq_service_tree *st,
 	bfqg = container_of(sd, struct bfq_group, sched_data);
 	bfqd = (struct bfq_data *)bfqg->bfqd;
 #endif
-	if (bfqq)//°ÑentityËùÊôbfqq²åÈë´Îbfqq->bfqd->active_listÁ´±í
+	if (bfqq)
 		list_add(&bfqq->bfqq_list, &bfqq->bfqd->active_list);
 #ifdef CONFIG_BFQ_GROUP_IOSCHED
 	if (bfqg != bfqd->root_group)
@@ -578,18 +584,17 @@ static void bfq_get_entity(struct bfq_entity *entity)
  * the following modifications to the tree can touch.  If @node is the
  * last node in the tree return %NULL.
  */
-//¿´×ÅÊÇÕÒµ½´«²Înode½ÚµãÏÂ ×îÏÂ±ßµÄ½Úµã
 static struct rb_node *bfq_find_deepest(struct rb_node *node)
 {
 	struct rb_node *deepest;
 
-	if (!node->rb_right && !node->rb_left)//Èç¹ûnodeÃ»ÓĞ×óÓÒ½ÚµãÔò·µ»ØnodeµÄparent
+	if (!node->rb_right && !node->rb_left)
 		deepest = rb_parent(node);
-	else if (!node->rb_right)//Èç¹ûnodeÃ»ÓÒ½Úµãµ«ÓĞ×ó½ÚµãÔò·µ»Ønode->rb_left
+	else if (!node->rb_right)
 		deepest = node->rb_left;
-	else if (!node->rb_left)//Èç¹ûnodeÃ»×ó½Úµãµ«ÓĞÓÒ½ÚµãÔò·µ»Ønode->rb_right
+	else if (!node->rb_left)
 		deepest = node->rb_right;
-	else {//Èç¹ûnode×óÓÒ½ÚµãÈ«ÓĞ
+	else {
 		deepest = rb_next(node);
 		if (deepest->rb_right)
 			deepest = deepest->rb_right;
@@ -605,7 +610,6 @@ static struct rb_node *bfq_find_deepest(struct rb_node *node)
  * @st: the service_tree containing the tree.
  * @entity: the entity being removed.
  */
-//´Óst->acitve treeÌŞ³ıentity
 static void bfq_active_extract(struct bfq_service_tree *st,
 			       struct bfq_entity *entity)
 {
@@ -616,13 +620,12 @@ static void bfq_active_extract(struct bfq_service_tree *st,
 	struct bfq_group *bfqg = NULL;
 	struct bfq_data *bfqd = NULL;
 #endif
-    //·µ»ØentityËùÊôºìºÚÊ÷ÏÂ±ßµÄentiry¶ÔÓ¦½Úµã
+
 	node = bfq_find_deepest(&entity->rb_node);
-    //°Ñentiry´Óst active treeÌŞ³ı
 	bfq_extract(&st->active, entity);
 
-    //´ÓentityµÄnodeËùÔÚ½Úµã£¬Ò»Ö±ÔÚºìºÚÊ÷ÏòÉÏµÃµ½ËüµÄparent½Úµã£¬¸üĞÂÕâĞ©ºìºÚÊ÷½Úµã¶ÔÓ¦µÄbfq_entityµÄ³ÉÔ±min_start£¬Í¬Ê±Ò²¸üĞÂ
-    //ÕâĞ©nodeÔÚºìºÚÊ÷µÄ×óÓÒ×Ó½Úµã¶ÔÓ¦µÄentityµÄmin_start¡£Õâ¸ö¸üĞÂ²Ù×÷Ò»Ö±µ½¸ù½Úµã²Å½áÊø
+        if(open_bfqq_printk)
+	     printk("%s %d %s %d bfq_service_tree:%llx bfq_entity:%llx bfqq:%llx rb_node:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)st,(u64)entity,(u64)bfqq,(u64)node);
 	if (node)
 		bfq_update_active_tree(node);
 
@@ -644,7 +647,6 @@ static void bfq_active_extract(struct bfq_service_tree *st,
  * @st: the service tree containing the tree.
  * @entity: the entity to insert.
  */
-//°Ñentity²åÈëst->idleÊ÷£¬²¢¿ÉÄÜ¸üĞÂst->first_idle»òst->last_idle
 static void bfq_idle_insert(struct bfq_service_tree *st,
 			    struct bfq_entity *entity)
 {
@@ -652,17 +654,19 @@ static void bfq_idle_insert(struct bfq_service_tree *st,
 	struct bfq_entity *first_idle = st->first_idle;
 	struct bfq_entity *last_idle = st->last_idle;
 
-    //st->idleºìºÚÊ÷µÄ×î×ó±ßµÄentiryµÄfinish×îĞ¡£¬×îÓÒ±ßµÄentityµÄfinish×î´ó¡£
-    
-    //st->first_idle¼ÇÂ¼entity->finish×îĞ¡µÄentity£¬¾ÍÊÇst->idleºìºÚÊ÷×î¿¿×óµÄentity
-	if (!first_idle || bfq_gt(first_idle->finish, entity->finish))//entity±ÈÔ­ÓĞµÄst->first_idleµÄfinish¸üĞ¡£¬if³ÉÁ¢£¬Ìæ»»Ô­ÓĞµÄ
+	if (!first_idle || bfq_gt(first_idle->finish, entity->finish)){
 		st->first_idle = entity;
-
-    //st->last_idle¼ÇÂ¼entity->finish×î´óµÄentity£¬¾ÍÊÇst->idleºìºÚÊ÷×î¿¿ÓÒµÄentity
-	if (!last_idle || bfq_gt(entity->finish, last_idle->finish))//entity±ÈÔ­ÓĞµÄst->last_idleµÄfinish¸ü´ó£¬if³ÉÁ¢£¬Ìæ»»Ô­ÓĞµÄ
+		if(open_bfqq_printk)
+			  printk("%s %d %s %d st->first_idle entity:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)(st->first_idle));
+	}
+	if (!last_idle || bfq_gt(entity->finish, last_idle->finish)){
 		st->last_idle = entity;
-    
-    //°Ñentity°´ÕÕentity->finish²åÈëst->idleºìºÚÊ÷£¬entity->finishÔ½Ğ¡entityÔÚºìºÚÊ÷Ô½¿¿×ó
+		if(open_bfqq_printk)
+			  printk("%s %d %s %d st->last_idle entity:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)st->last_idle);
+	}
+        if(open_bfqq_printk)
+	    printk("%s %d %s %d ->bfq_insert() &st->idle:%llx entity:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)(&st->idle),(u64)entity);
+
 	bfq_insert(&st->idle, entity);
 
 	if (bfqq)
@@ -684,7 +688,6 @@ static void bfq_idle_insert(struct bfq_service_tree *st,
  * will take care of putting the reference when the queue finally
  * stops being served.
  */
-//entity²»ÔÙ±»ÓÃµ½£¬ÊÍ·ÅµôbfqqºÍentity
 static void bfq_forget_entity(struct bfq_service_tree *st,
 			      struct bfq_entity *entity,
 			      bool is_in_service)
@@ -692,13 +695,13 @@ static void bfq_forget_entity(struct bfq_service_tree *st,
 	struct bfq_queue *bfqq = bfq_entity_to_bfqq(entity);
 
 	entity->on_st_or_in_serv = false;
-    //bfqqµÄentityÒª´ÓstÌŞ³ı£¬st->wsum¼õÈ¥¸ÃenyityµÄÈ¨ÖØ
+	if(open_bfqq_printk)
+		  printk("%s %d %s %d st->wsum:%ld entity->weight:%d is_in_service:%d\n",__func__,__LINE__,current->comm,current->pid,st->wsum,entity->weight,is_in_service);
 	st->wsum -= entity->weight;
-    
-	if (is_in_service)//is_in_serviceÎª1Ôò¸Ãentity»¹ÔÚstµÄactive»òidle tree£¬²»ÄÜÊÍ·Åbfqq
+	if (is_in_service)
 		return;
 
-	if (bfqq)//ÊÍ·Åbfqq£¬
+	if (bfqq)
 		bfq_put_queue(bfqq);
 	else
 		bfqg_and_blkg_put(container_of(entity, struct bfq_group,
@@ -710,11 +713,9 @@ static void bfq_forget_entity(struct bfq_service_tree *st,
  * @st: service tree for the entity.
  * @entity: the entity being released.
  */
-//entity´Óst->idle treeÌŞ³ıµô£¬entityÈç¹û²»ÔÙ±»ÓÃµ½£¬ÊÍ·ÅµôbfqqºÍentity
 void bfq_put_idle_entity(struct bfq_service_tree *st, struct bfq_entity *entity)
 {
-	bfq_idle_extract(st, entity);//entity´Óst->idle treeÌŞ³ıµô£¬¿ÉÄÜ¸üĞÂst->first_idle»òst->last_idle
-	//entityÈç¹û²»ÔÙ±»ÓÃµ½£¬ÊÍ·Åbfqq,°ÑentityÌŞ³ıµô
+	bfq_idle_extract(st, entity);
 	bfq_forget_entity(st, entity,
 			  entity == entity->sched_data->in_service_entity);
 }
@@ -726,33 +727,36 @@ void bfq_put_idle_entity(struct bfq_service_tree *st, struct bfq_entity *entity)
  * To preserve the global O(log N) complexity we only remove one entry here;
  * as the idle tree will not grow indefinitely this can be done safely.
  */
-//´¦Àíst->idle treeµÄfirst_idleºÍlast_idle£¬¿ÉÄÜ»á°Ñfirst_idleÖ¸ÏòµÄentity´Óst->idle treeÌŞ³ıµô£¬ÊÍ·ÅµôËüµÄbfqqºÍentity
 static void bfq_forget_idle(struct bfq_service_tree *st)
 {
 	struct bfq_entity *first_idle = st->first_idle;
 	struct bfq_entity *last_idle = st->last_idle;
 
+        if(open_bfqq_printk)
+	    printk("1:%s %d %s %d st->vtime:%llu\n",__func__,__LINE__,current->comm,current->pid,st->vtime);
 	if (RB_EMPTY_ROOT(&st->active) && last_idle &&
 	    !bfq_gt(last_idle->finish, st->vtime)) {
 		/*
 		 * Forget the whole idle tree, increasing the vtime past
 		 * the last finish time of idle entities.
 		 */
+		if(open_bfqq_printk)
+	            printk("2:%s %d %s %d last_idle->finish:%llu\n",__func__,__LINE__,current->comm,current->pid,last_idle->finish);
 		st->vtime = last_idle->finish;
 	}
-    //first_idle·Ç¿Õ£¬²¢ÇÒst->vtime´óÓÚfirst_idle->finishÔòif³ÉÁ¢
-	if (first_idle && !bfq_gt(first_idle->finish, st->vtime))
-        //first_idleÖ¸ÏòµÄentity´Óst->idle treeÌŞ³ıµô£¬Èç¹û²»ÔÙ±»ÓÃµ½£¬ÊÍ·ÅµôËüµÄbfqqºÍentity
+	if (first_idle && !bfq_gt(first_idle->finish, st->vtime)){
+		if(open_bfqq_printk)
+		    printk("3:%s %d %s %d first_idle->finish:%llu\n",__func__,__LINE__,current->comm,current->pid,first_idle->finish);
 		bfq_put_idle_entity(st, first_idle);
+	}
 }
 
 struct bfq_service_tree *bfq_entity_service_tree(struct bfq_entity *entity)
 {
-    //entity->sched_dataÖ¸ÏòµÄ¾ÍÊÇbfq_sched_data
 	struct bfq_sched_data *sched_data = entity->sched_data;
 	unsigned int idx = bfq_class_idx(entity);
-
-    //°´ÕÕentityµÄµ÷¶È²ßÂÔ´Ósched_data->service_tree[idx]ÕÒµ½bfq_service_tree
+        if(open_bfqq_printk)
+	  printk("%s %d %s %d bfq_class_idx:%d\n",__func__,__LINE__,current->comm,current->pid,idx);
 	return sched_data->service_tree + idx;
 }
 
@@ -790,6 +794,9 @@ __bfq_entity_update_weight_prio(struct bfq_service_tree *old_st,
 		struct bfq_sched_data *sd;
 		struct bfq_group *bfqg;
 #endif
+
+		if(open_bfqq_printk)
+		    printk("%s %d %s %d \n",__func__,__LINE__,current->comm,current->pid);
 
 		if (bfqq)
 			bfqd = bfqq->bfqd;
@@ -867,6 +874,8 @@ __bfq_entity_update_weight_prio(struct bfq_service_tree *old_st,
 		if (new_st != old_st)
 			entity->start = new_st->vtime;
 	}
+	if(open_bfqq_printk)
+	    printk("%s %d %s %d entity:%llx entity->weight:%d new_st:%llx new_st->wsum:%ld old_st:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)entity,entity->weight,(u64)new_st,new_st->wsum,(u64)old_st);
 
 	return new_st;
 }
@@ -881,11 +890,13 @@ __bfq_entity_update_weight_prio(struct bfq_service_tree *old_st,
  * are synchronized every time a new bfqq is selected for service.  By now,
  * we keep it to better check consistency.
  */
-//¸ù¾İ´ıÅÉ·¢reqµÄÅä¶îserved£¬Ôö¼ÓentityÅä¶îentity->serviceºÍµ÷¶ÈÆ÷ĞéÄâÔËĞĞÊ±¼äst->vtime
-void bfq_bfqq_served(struct bfq_queue *bfqq, int served)//servedÊÇµ±Ç°ÒªÅÉ·¢reqÏûºÄµÄÅä¶î
+void bfq_bfqq_served(struct bfq_queue *bfqq, int served)
 {
 	struct bfq_entity *entity = &bfqq->entity;
 	struct bfq_service_tree *st;
+
+	if(open_bfqq_printk)
+		  printk("1:%s %d %s %d bfqq->first_IO_time:%ld bfqq->service_from_backlogged:%ld jiffies:%ld bfqq->wr_coeff:%d bfqq->service_from_wr:%ld  served:%d\n",__func__,__LINE__,current->comm,current->pid,bfqq->first_IO_time,bfqq->service_from_backlogged,jiffies,bfqq->wr_coeff,bfqq->service_from_wr,served);
 
 	if (!bfqq->service_from_backlogged)
 		bfqq->first_IO_time = jiffies;
@@ -895,13 +906,14 @@ void bfq_bfqq_served(struct bfq_queue *bfqq, int served)//servedÊÇµ±Ç°ÒªÅÉ·¢reqÏ
 
 	bfqq->service_from_backlogged += served;
 	for_each_entity(entity) {
-        //È¡³öentityÖ¸ÏòµÄµ÷¶ÈÆ÷ÊµÌåst
 		st = bfq_entity_service_tree(entity);
-        //entity->serviceÀÛ¼Ó´ıÅÉ·¢reqµÄÅä¶îserved
+
+                if(open_bfqq_printk)
+	            printk("2:%s %d %s %d bfq_service_tree:%llx entity:%llx entity->service:%d st->vtime:%lld st->wsum:%ld bfq_delta:%lld\n",__func__,__LINE__,current->comm,current->pid,(u64)st,(u64)entity,entity->service,st->vtime,st->wsum,bfq_delta(served, st->wsum));
+
 		entity->service += served;
-        //st->vtimeÀÛ¼Ó´ıÅÉ·¢reqµÄÅä¶îserved³ıÒÔst->wsumËã³öµÄĞéÄâÔËĞĞÊ±¼ä
+
 		st->vtime += bfq_delta(served, st->wsum);
-        //´¦Àíst->idle treeµÄfirst_idleºÍlast_idle£¬¿ÉÄÜ»á°Ñfirst_idleÖ¸ÏòµÄentity´Óst->idle treeÌŞ³ıµô£¬ÊÍ·ÅµôËüµÄbfqqºÍentity
 		bfq_forget_idle(st);
 	}
 	bfq_log_bfqq(bfqq->bfqd, bfqq, "bfqq_served %d secs", served);
@@ -944,6 +956,8 @@ void bfq_bfqq_charge_time(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 		(bfqd->bfq_max_budget * bounded_time_ms) / timeout_ms;
 	int tot_serv_to_charge = max(serv_to_charge_for_time, entity->service);
 
+	if(open_bfqq_printk)
+            printk("%s %d %s %d bfqq:%llx entity:%llx tot_serv_to_charge:%d entity->budget:%d entity->service:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,(u64)entity,tot_serv_to_charge,entity->budget,entity->service);
 	/* Increase budget to avoid inconsistencies */
 	if (tot_serv_to_charge > entity->budget)
 		entity->budget = tot_serv_to_charge;
@@ -951,21 +965,21 @@ void bfq_bfqq_charge_time(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 	bfq_bfqq_served(bfqq,
 			max_t(int, 0, tot_serv_to_charge - entity->service));
 }
-//°´ÕÕentity->budget¼ÆËãentityµÄĞéÄâÔËĞĞÊ±¼ä²¢ÀÛ¼Óµ½entity->finish£¬×îºó°Ñentity°´ÕÕĞÂµÄentity->finish²åÈëst->activeºìºÚÊ÷
+
 static void bfq_update_fin_time_enqueue(struct bfq_entity *entity,
 					struct bfq_service_tree *st,
 					bool backshifted)
 {
 	struct bfq_queue *bfqq = bfq_entity_to_bfqq(entity);
-
+       
+       	if(open_bfqq_printk)
+	    printk("1:%s %d %s %d entity:%llx entity->budget:%d backshifted:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)entity,entity->budget,backshifted);
 	/*
 	 * When this function is invoked, entity is not in any service
 	 * tree, then it is safe to invoke next function with the last
 	 * parameter set (see the comments on the function).
 	 */
 	st = __bfq_entity_update_weight_prio(st, entity, true);
-    //¸ù¾İentity->budget/entity->weight¼ÆËãentityÒÑ¾­ÏûºÄµÄĞéÄâÔËĞĞÊ±¼ä£¬entity->start¼ÓÉÏÕâ¶ÎĞéÄâÔËĞĞÊ±¼äµÃµ½entity->finish
-    //ÕâÀïÊÇ°´ÕÕentityµÄ×ÜÅä¶î¼ÆËãµÄĞéÄâÔËĞĞÊ±¼ä
 	bfq_calc_finish(entity, entity->budget);
 
 	/*
@@ -1001,6 +1015,8 @@ static void bfq_update_fin_time_enqueue(struct bfq_entity *entity,
 	 * weight-raised queues to become higher than the backshifted
 	 * finish timestamps of non weight-raised queues.
 	 */
+	if(open_bfqq_printk)
+	       printk("2:%s %d %s %d st->vtime:%llu entity->finish:%llu\n",__func__,__LINE__,current->comm,current->pid,st->vtime,entity->finish);
 	if (backshifted && bfq_gt(st->vtime, entity->finish)) {
 		unsigned long delta = st->vtime - entity->finish;
 
@@ -1009,9 +1025,10 @@ static void bfq_update_fin_time_enqueue(struct bfq_entity *entity,
 
 		entity->start += delta;
 		entity->finish += delta;
+	        if(open_bfqq_printk)
+	            printk("3:%s %d %s %d entity->start:%llu entity->finish:%llu delta:%ld\n",__func__,__LINE__,current->comm,current->pid,entity->start,entity->finish,delta);
 	}
-    
-    //°Ñentity°´ÕÕĞÂµÄentity->finish²åÈëst->activeºìºÚÊ÷
+
 	bfq_active_insert(st, entity);
 }
 
@@ -1027,7 +1044,6 @@ static void bfq_update_fin_time_enqueue(struct bfq_entity *entity,
  * inserts entity into its active tree, after possibly extracting it
  * from its idle tree.
  */
-//¼ÆËãĞÂµÄentity->start£¬°´ÕÕentity->budget¼ÆËãentityµÄĞéÄâÔËĞĞÊ±¼ä²¢ÀÛ¼Óµ½entity->finish£¬°Ñentity°´ÕÕentity->finish²åÈëst->active tree
 static void __bfq_activate_entity(struct bfq_entity *entity,
 				  bool non_blocking_wait_rq)
 {
@@ -1036,32 +1052,32 @@ static void __bfq_activate_entity(struct bfq_entity *entity,
 	unsigned long long min_vstart;
 
 	/* See comments on bfq_fqq_update_budg_for_activation */
-    //ifºÍelse·ÖÖ§²âÊÔ¶¼ÓĞ³ÉÁ¢£¬ĞÂ·ÖÅäµÄbfqq¼°entityÊ±ÊÇ×ßelse·ÖÖ§
 	if (non_blocking_wait_rq && bfq_gt(st->vtime, entity->finish)) {
 		backshifted = true;
 		min_vstart = entity->finish;
 	} else
 		min_vstart = st->vtime;
+       
+	if(open_bfqq_printk)
+		  printk("1:%s %d %s %d min_vstart:%lld entity->finish:%lld st->vtime:%lld non_blocking_wait_rq:%d\n",__func__,__LINE__,current->comm,current->pid,min_vstart,entity->finish,st->vtime,non_blocking_wait_rq);
 
-    //entityÏÖÔÚ´¦ÓÚst->idle tree
 	if (entity->tree == &st->idle) {
 		/*
 		 * Must be on the idle tree, bfq_idle_extract() will
 		 * check for that.
 		 */
-		//entity´Óst->idle treeÌŞ³ıµô£¬¿ÉÄÜ¸üĞÂst->first_idle»òst->last_idle
+		if(open_bfqq_printk)
+		    printk("2:%s %d %s %d entity:%llx bfq_service_tree:%llx entity->tree:%llx if (entity->tree == &st->idle) ->bfq_idle_extract()\n",__func__,__LINE__,current->comm,current->pid,(u64)entity,(u64)st,(u64)(entity->tree));
 		bfq_idle_extract(st, entity);
 		entity->start = bfq_gt(min_vstart, entity->finish) ?
 			min_vstart : entity->finish;
-	} else {//µ½ÕâÀïËµÃ÷entityÖ®Ç°²»ÔÚst->idle»òst->activeºìºÚÊ÷¡£entityÊÇĞÂ·ÖÅäµÄÒ²×ßÕâÀï
+	} else {
 		/*
 		 * The finish time of the entity may be invalid, and
 		 * it is in the past for sure, otherwise the queue
 		 * would have been on the idle tree.
 		 */
-		//entity->start 
 		entity->start = min_vstart;
-        //µ÷¶ÈÆ÷stµÄactiveºÍidle treeÉÏËùÓĞentityµÄÈ¨ÖØÖ®ºÍ£¬ÀÛ¼ÓÃ¿Ò»¸öentityµÄentity->weight
 		st->wsum += entity->weight;
 		/*
 		 * entity is about to be inserted into a service tree,
@@ -1074,6 +1090,8 @@ static void __bfq_activate_entity(struct bfq_entity *entity,
 		entity->on_st_or_in_serv = true;
 	}
 
+        if(open_bfqq_printk)
+	     printk("3:%s %d %s %d entity->start:%lld st->wsum:%ld entity->weight:%d\n",__func__,__LINE__,current->comm,current->pid,entity->start,st->wsum,entity->weight);
 #ifdef CONFIG_BFQ_GROUP_IOSCHED
 	if (!bfq_entity_to_bfqq(entity)) { /* bfq_group */
 		struct bfq_group *bfqg =
@@ -1087,7 +1105,6 @@ static void __bfq_activate_entity(struct bfq_entity *entity,
 	}
 #endif
 
-    //°´ÕÕentity->budget¼ÆËãentityµÄĞéÄâÔËĞĞÊ±¼ä²¢ÀÛ¼Óµ½entity->finish£¬×îºó°Ñentity°´ÕÕĞÂµÄentity->finish²åÈëst->activeºìºÚÊ÷
 	bfq_update_fin_time_enqueue(entity, st, backshifted);
 }
 
@@ -1106,13 +1123,14 @@ static void __bfq_activate_entity(struct bfq_entity *entity,
  * entity back into its active tree (in the new, right position for
  * the new values of the timestamps).
  */
-//¼ÆËãentityµÄĞéÄâÔËĞĞÊ±¼ä²¢ÀÛ¼Óµ½entity->finish£¬×îºó°Ñentity°´ÕÕĞÂµÄentity->finish²åÈëst->activeºìºÚÊ÷
 static void __bfq_requeue_entity(struct bfq_entity *entity)
 {
 	struct bfq_sched_data *sd = entity->sched_data;
 	struct bfq_service_tree *st = bfq_entity_service_tree(entity);
 
-	if (entity == sd->in_service_entity) {//entityÊÇIOµ÷¶ÈÆ÷ÕıÔÚÊ¹ÓÃµÄentity
+	if (entity == sd->in_service_entity) {
+		if(open_bfqq_printk)
+		    printk("1:%s %d %s %d entity:%llx entity->tree:%llx if (entity == sd->in_service_entity)\n",__func__,__LINE__,current->comm,current->pid,(u64)entity,(u64)(entity->tree));
 		/*
 		 * We are requeueing the current in-service entity,
 		 * which may have to be done for one of the following
@@ -1135,10 +1153,7 @@ static void __bfq_requeue_entity(struct bfq_entity *entity)
 		 * new value of the start time, and to the budget of
 		 * the entity.
 		 */
-		 
-		//¸ù¾İentity->service/entity->weight¼ÆËãentityÒÑ¾­ÏûºÄµÄĞéÄâÔËĞĞÊ±¼ä£¬entity->start¼ÓÉÏÕâ¶ÎĞéÄâÔËĞĞÊ±¼ä¾ÍÊÇentity->finish
 		bfq_calc_finish(entity, entity->service);
-        //ÓÃentity->finish¸üĞÂentity->start£¬ÖØÖÃÁË
 		entity->start = entity->finish;
 		/*
 		 * In addition, if the entity had more than one child
@@ -1153,7 +1168,6 @@ static void __bfq_requeue_entity(struct bfq_entity *entity)
 		 * entity here, 2) update the finish time and requeue
 		 * the entity according to the new timestamps below.
 		 */
-		//Èç¹ûentityÔÚst->activeÊ÷£¬Ôò´Óst->acitve treeÌŞ³ıentity£¬ÏÂ±ßÔÙ°Ñentity¼ÓÈëst->activeÊ÷
 		if (entity->tree)
 			bfq_active_extract(st, entity);
 	} else { /* The entity is already active, and not in service */
@@ -1171,39 +1185,39 @@ static void __bfq_requeue_entity(struct bfq_entity *entity)
 		 * timestamps below. This is the same approach as the
 		 * non-extracted-entity sub-case above.
 		 */
-		//´Óst->acitve treeÌŞ³ıentity¡£ÕâÀï²»½ûÓĞÒÉÎÊ£¬ÉÏ±ßÒ²ÊÇÖ´ĞĞbfq_active_extract()£¬ÓĞÊ²Ã´Çø±ğ?ÉÏ±ß¸üĞÂÁËentity->finish£¬ÕâÀïÃ»ÓĞ
-		//ÏÂ±ß°ÑentityÖØĞÂ²åÈëst->activeÊ÷Ê±£¬¾ÍÊÇ°´ÕÕ×îĞÂentity->finish°Ñentity²åÈëst->active
+		if(open_bfqq_printk)
+			  printk("2:%s %d %s %d ->bfq_active_extract()\n",__func__,__LINE__,current->comm,current->pid);
 		bfq_active_extract(st, entity);
 	}
-    
-    //°´ÕÕentity->budget¼ÆËãentityµÄĞéÄâÔËĞĞÊ±¼ä²¢ÀÛ¼Óµ½entity->finish£¬×îºó°Ñentity°´ÕÕĞÂµÄentity->finish²åÈëst->activeºìºÚÊ÷
+
 	bfq_update_fin_time_enqueue(entity, st, false);
 }
 
-//Èç¹ûentityÊÇµ÷¶ÈÆ÷ÕıÔÚÊ¹ÓÃµÄentiry»òentity´¦ÓÚst->activeÊ÷,¼ÆËãentityµÄĞéÄâÔËĞĞÊ±¼ä²¢ÀÛ¼Óµ½entity->finish£¬°Ñentity°´ÕÕĞÂµÄ
-//entity->finish²åÈëst->activeºìºÚÊ÷¡£·ñÔò¼ÆËãĞÂµÄentity->start£¬°´ÕÕentity->budget¼ÆËãentityµÄĞéÄâÔËĞĞÊ±¼ä²¢ÀÛ¼Óµ½entity->finish£¬
-//×îºó°Ñentity°´ÕÕentity->finish²åÈëst->active tree
 static void __bfq_activate_requeue_entity(struct bfq_entity *entity,
 					  struct bfq_sched_data *sd,
 					  bool non_blocking_wait_rq)
 {
 	struct bfq_service_tree *st = bfq_entity_service_tree(entity);
 
-    //Èç¹ûentityÊÇµ÷¶ÈÆ÷ÕıÔÚÊ¹ÓÃµÄentiry»òentity´¦ÓÚst->activeÊ÷
-	if (sd->in_service_entity == entity || entity->tree == &st->active)
+	if (sd->in_service_entity == entity || entity->tree == &st->active){
 		 /*
 		  * in service or already queued on the active tree,
 		  * requeue or reposition
 		  */
-		//¼ÆËãentityµÄĞéÄâÔËĞĞÊ±¼ä²¢ÀÛ¼Óµ½entity->finish£¬×îºó°Ñentity°´ÕÕĞÂµÄentity->finish²åÈëst->activeºìºÚÊ÷
+		if(open_bfqq_printk)
+			  printk("1:%s %d %s %d entity:%llx bfq_service_tree:%llx ->__bfq_requeue_entity()\n",__func__,__LINE__,current->comm,current->pid,(u64)entity,(u64)st);
 		__bfq_requeue_entity(entity);
-	else
+	}
+	else{
 		/*
 		 * Not in service and not queued on its active tree:
 		 * the activity is idle and this is a true activation.
 		 */
-		//¼ÆËãĞÂµÄentity->start£¬°´ÕÕentity->budget¼ÆËãentityµÄĞéÄâÔËĞĞÊ±¼ä²¢ÀÛ¼Óµ½entity->finish£¬°Ñentity°´ÕÕentity->finish²åÈëst->active tree
+		
+		if(open_bfqq_printk)
+			  printk("2:%s %d %s %d entity:%llx bfq_service_tree:%llx non_blocking_wait_rq:%d ->__bfq_activate_entity()\n",__func__,__LINE__,current->comm,current->pid,(u64)entity,(u64)st,non_blocking_wait_rq);
 		__bfq_activate_entity(entity, non_blocking_wait_rq);
+	}
 }
 
 
@@ -1220,9 +1234,6 @@ static void __bfq_activate_requeue_entity(struct bfq_entity *entity,
  * @expiration: true if this function is being invoked in the expiration path
  *             of the in-service queue
  */
-//Èç¹ûentityÊÇµ÷¶ÈÆ÷ÕıÔÚÊ¹ÓÃµÄentiry»òentity´¦ÓÚst->activeÊ÷,¼ÆËãentityµÄĞéÄâÔËĞĞÊ±¼ä²¢ÀÛ¼Óµ½entity->finish£¬°Ñentity°´ÕÕĞÂµÄ
-//entity->finish²åÈëst->activeºìºÚÊ÷¡£·ñÔò¼ÆËãĞÂµÄentity->start£¬°´ÕÕentity->budget¼ÆËãentityµÄĞéÄâÔËĞĞÊ±¼ä²¢ÀÛ¼Óµ½entity->finish£¬
-//×îºó°Ñentity°´ÕÕentity->finish²åÈëst->active tree¡£×îºó´Óst²éÕÒºÏÊÊµÄentity²¢¸üĞÂµ½sd->next_in_service
 static void bfq_activate_requeue_entity(struct bfq_entity *entity,
 					bool non_blocking_wait_rq,
 					bool requeue, bool expiration)
@@ -1231,12 +1242,10 @@ static void bfq_activate_requeue_entity(struct bfq_entity *entity,
 
 	for_each_entity(entity) {
 		sd = entity->sched_data;
-      //Èç¹ûentityÊÇµ÷¶ÈÆ÷ÕıÔÚÊ¹ÓÃµÄentiry»òentity´¦ÓÚst->activeÊ÷,¼ÆËãentityµÄĞéÄâÔËĞĞÊ±¼ä²¢ÀÛ¼Óµ½entity->finish£¬°Ñentity°´ÕÕĞÂµÄ
-      //entity->finish²åÈëst->activeºìºÚÊ÷¡£·ñÔò¼ÆËãĞÂµÄentity->start£¬°´ÕÕentity->budget¼ÆËãentityµÄĞéÄâÔËĞĞÊ±¼ä²¢ÀÛ¼Óµ½entity->finish£¬
-      //×îºó°Ñentity°´ÕÕentity->finish²åÈëst->active tree
+		if(open_bfqq_printk)
+			  printk("1:%s %d %s %d bfq_sched_data:%llx entity:%llx expiration:%d non_blocking_wait_rq:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)sd,(u64)entity,expiration,non_blocking_wait_rq);
 		__bfq_activate_requeue_entity(entity, sd, non_blocking_wait_rq);
 
-        //´Óst²éÕÒºÏÊÊµÄentity²¢¸üĞÂµ½sd->next_in_service£¬Ã»ÓĞÕÒµ½Ôò·µ»ØNULL
 		if (!bfq_update_next_in_service(sd, entity, expiration) &&
 		    !requeue)
 			break;
@@ -1254,7 +1263,6 @@ static void bfq_activate_requeue_entity(struct bfq_entity *entity,
  * from that tree, and if necessary and allowed, puts it into the idle
  * tree.
  */
-//°Ñentity´Óst->active»òst->idleºìºÚÊ÷Ìßµô£¬ins_into_idle_treeÎªtrueÔò°ÑentityÔÙ²åÈëst->idleÊ÷£¬·ñÔòÖ±½ÓÊÍ·Åµôentity¼°bfqq.ÌŞ³ı·µ»Øtrue
 bool __bfq_deactivate_entity(struct bfq_entity *entity, bool ins_into_idle_tree)
 {
 	struct bfq_sched_data *sd = entity->sched_data;
@@ -1273,13 +1281,13 @@ bool __bfq_deactivate_entity(struct bfq_entity *entity, bool ins_into_idle_tree)
 	 * represented by entity. Therefore, the field
 	 * entity->sched_data has been set, and we can safely use it.
 	 */
-	//ÕÒµ½entiryËùÊôst
 	st = bfq_entity_service_tree(entity);
-    //entityÊÇsdÕıÔÚÊ¹ÓÃµÄentityÔòis_in_serviceÎªtrue
 	is_in_service = entity == sd->in_service_entity;
-    
-    //serviceÊÇentityÒÑ¾­ÏûºÄµÄÅä¶î£¬³ıÒÔweightµÃµ½entityÒÑ¾­ÏûºÄµÄĞéÄâÔËĞĞÊ±¼ä£¬ÔÙ¼ÓÉÏentity->startµÃµ½entity->finish
-	bfq_calc_finish(entity, entity->service);
+
+ 	bfq_calc_finish(entity, entity->service);
+
+        if(open_bfqq_printk)
+	   printk("1:%s %d %s %d entity:%llx entity->service:%d ins_into_idle_tree:%d sd->in_service_entity:%llx st:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)entity,entity->service,ins_into_idle_tree,(u64)sd->in_service_entity,(u64)st);
 
 	if (is_in_service)
 		sd->in_service_entity = NULL;
@@ -1291,16 +1299,30 @@ bool __bfq_deactivate_entity(struct bfq_entity *entity, bool ins_into_idle_tree)
 		 */
 		entity->service = 0;
 
-	if (entity->tree == &st->active)//Èç¹ûentity´¦ÓÚst->activeÊ÷,´Óst->acitve treeÌŞ³ıentity
+	if (entity->tree == &st->active){
+		if(open_bfqq_printk)
+			  printk("2:%s %d %s %d &st->active:%llx ->bfq_active_extract()\n",__func__,__LINE__,current->comm,current->pid,(u64)(&st->active));
 		bfq_active_extract(st, entity);
-	else if (!is_in_service && entity->tree == &st->idle)//Èç¹ûentity´¦ÓÚst->idleÊ÷£¬²¢ÇÒentity²»ÊÇstÕıÔÚÊ¹ÓÃµÄentity
-		bfq_idle_extract(st, entity);//entity´Óst->idle treeÌŞ³ıµô£¬¿ÉÄÜ¸üĞÂst->first_idle»òst->last_idle
+	}
+	else if (!is_in_service && entity->tree == &st->idle){
+		if(open_bfqq_printk)
+			  printk("3:%s %d %s %d &st->idle:%llx ->bfq_idle_extract()\n",__func__,__LINE__,current->comm,current->pid,(u64)(&st->idle));
+		bfq_idle_extract(st, entity);
+	}
 
-    //ins_into_idle_treeÎªfalseÔò²»»á°ÑentityÔÙ²åÈëµ½st->idle,¶øÊÇÊÍ·Åµôentity¡£»òÕßst->vtime>=entity->finishÒ²ÊÇÊÍ·Åµôentity
-	if (!ins_into_idle_tree || !bfq_gt(entity->finish, st->vtime))
-		bfq_forget_entity(st, entity, is_in_service);//entity²»ÔÙ±»ÓÃµ½£¬ÊÍ·Åbfqq,°ÑentityÌŞ³ıµô
-	else
-		bfq_idle_insert(st, entity);//°ÑentityÔÙ²åÈëst->idleÊ÷£¬²¢¿ÉÄÜ¸üĞÂst->first_idle»òst->last_idle
+	if(open_bfqq_printk)
+	    printk("4:%s %d %s %d entity->finish:%llu st->vtime:%llu\n",__func__,__LINE__,current->comm,current->pid,entity->finish,st->vtime);
+
+	if (!ins_into_idle_tree || !bfq_gt(entity->finish, st->vtime)){
+		if(open_bfqq_printk)
+			  printk("5:%s %d %s %d ->bfq_forget_entity()\n",__func__,__LINE__,current->comm,current->pid);
+		bfq_forget_entity(st, entity, is_in_service);
+	}
+	else{
+		if(open_bfqq_printk)
+			  printk("6:%s %d %s %d ->bfq_idle_insert()\n",__func__,__LINE__,current->comm,current->pid);
+		bfq_idle_insert(st, entity);
+	}
 
 	return true;
 }
@@ -1312,8 +1334,6 @@ bool __bfq_deactivate_entity(struct bfq_entity *entity, bool ins_into_idle_tree)
  * @expiration: true if this function is being invoked in the expiration path
  *             of the in-service queue
  */
-//1:°Ñentity´Óst->active»òst->idleºìºÚÊ÷Ìßµô£¬ins_into_idle_treeÎªtrueÔò°ÑentityÔÙ²åÈëst->idleÊ÷£¬·ñÔòÖ±½ÓÊÍ·Åµôentity¼°bfqq¡£
-//2:¼ÆËãentityµÄĞéÄâÔËĞĞÊ±¼ä²¢ÀÛ¼Óµ½entity->finish£¬×îºó°Ñentity°´ÕÕĞÂµÄentity->finish²åÈëst->activeºìºÚÊ÷
 static void bfq_deactivate_entity(struct bfq_entity *entity,
 				  bool ins_into_idle_tree,
 				  bool expiration)
@@ -1323,9 +1343,8 @@ static void bfq_deactivate_entity(struct bfq_entity *entity,
 
 	for_each_entity_safe(entity, parent) {
 		sd = entity->sched_data;
-
-        //°Ñentity´Óst->active»òst->idleºìºÚÊ÷Ìßµô£¬ins_into_idle_treeÎªtrueÔò°ÑentityÔÙ²åÈëst->idleÊ÷£¬·ñÔòÖ±½ÓÊÍ·Åµôentity
-        //¼°bfqq¡£ÌŞ³ı³É¹¦·µ»Øtrue
+                if(open_bfqq_printk)
+	            printk("1:%s %d %s %d bfq_entity:%llx bfq_sched_data:%llx ins_into_idle_tree:%d sd->next_in_service:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)entity,(u64)sd,ins_into_idle_tree,(u64)(sd->next_in_service));
 		if (!__bfq_deactivate_entity(entity, ins_into_idle_tree)) {
 			/*
 			 * entity is not in any tree any more, so
@@ -1337,15 +1356,16 @@ static void bfq_deactivate_entity(struct bfq_entity *entity,
 			return;
 		}
 
-        //entityÊÇÕıÔÚsd->next_in_serviceÖ¸ÏòµÄµ÷¶ÈÆ÷ÕıÔÚÊ¹ÓÃµÄentiry£¬ÔòÒªÑ¡ÔñÒ»¸öĞÂµÄnext_in_service entity
-		if (sd->next_in_service == entity)
+		if (sd->next_in_service == entity){
 			/*
 			 * entity was the next_in_service entity,
 			 * then, since entity has just been
 			 * deactivated, a new one must be found.
 			 */
-			//´Óst²éÕÒºÏÊÊµÄentity²¢¸üĞÂµ½sd->next_in_service£¬Ã»ÓĞÕÒµ½Ôò·µ»ØNULL
+			if(open_bfqq_printk)
+				  printk("2:%s %d %s %d if (sd->next_in_service == entity)\n",__func__,__LINE__,current->comm,current->pid);
 			bfq_update_next_in_service(sd, NULL, expiration);
+		}
 
 		if (sd->next_in_service || sd->in_service_entity) {
 			/*
@@ -1368,6 +1388,8 @@ static void bfq_deactivate_entity(struct bfq_entity *entity,
 			 * next_in_service. See the comments on the
 			 * definition of next_in_service for details.
 			 */
+			if(open_bfqq_printk)
+				  printk("3:%s %d %s %d if (sd->next_in_service || sd->in_service_entity)\n",__func__,__LINE__,current->comm,current->pid);
 			break;
 		}
 
@@ -1386,6 +1408,8 @@ static void bfq_deactivate_entity(struct bfq_entity *entity,
 		ins_into_idle_tree = true;
 	}
 
+	if(open_bfqq_printk)
+	    printk("4:%s %d %s %d\n",__func__,__LINE__,current->comm,current->pid);
 	/*
 	 * If the deactivation loop is fully executed, then there are
 	 * no more entities to touch and next loop is not executed at
@@ -1394,18 +1418,21 @@ static void bfq_deactivate_entity(struct bfq_entity *entity,
 	 * is not the case.
 	 */
 	entity = parent;
-	for_each_entity(entity) {//ÆÕÍ¨²âÊÔÊ±Ã»ÓĞparent£¬²»³ÉÁ¢
+	for_each_entity(entity) {
 		/*
 		 * Invoke __bfq_requeue_entity on entity, even if
 		 * already active, to requeue/reposition it in the
 		 * active tree (because sd->next_in_service has
 		 * changed)
 		 */
-		//¼ÆËãentityµÄĞéÄâÔËĞĞÊ±¼ä²¢ÀÛ¼Óµ½entity->finish£¬×îºó°Ñentity°´ÕÕĞÂµÄentity->finish²åÈëst->activeºìºÚÊ÷
+		if(open_bfqq_printk)
+		    printk("5:%s %d %s %d entity:%llx ->__bfq_requeue_entity()\n",__func__,__LINE__,current->comm,current->pid,(u64)entity);
 		__bfq_requeue_entity(entity);
 
 		sd = entity->sched_data;
-        //´Óst²éÕÒºÏÊÊµÄentity²¢¸üĞÂµ½sd->next_in_service£¬Ã»ÓĞÕÒµ½Ôò·µ»ØNULL
+
+		if(open_bfqq_printk)
+		    printk("6:%s %d %s %d entity:%llx expiration:%d ->bfq_update_next_in_service()\n",__func__,__LINE__,current->comm,current->pid,(u64)entity,expiration);
 		if (!bfq_update_next_in_service(sd, entity, expiration) &&
 		    !expiration)
 			/*
@@ -1427,10 +1454,12 @@ static void bfq_deactivate_entity(struct bfq_entity *entity,
  */
 static u64 bfq_calc_vtime_jump(struct bfq_service_tree *st)
 {
-    //st->active ºìºÚÊ÷µÄroot entity
 	struct bfq_entity *root_entity = bfq_root_active_entity(&st->active);
 
-	if (bfq_gt(root_entity->min_start, st->vtime))//st->vtimeĞ¡ÓÚroot_entity->min_startÔò·µ»Øroot_entity->min_start
+        if(open_bfqq_printk)
+	    printk("1:%s %d %s %d root_entity:%llx root_entity->min_start:%lld st->vtime:%lld\n",__func__,__LINE__,current->comm,current->pid,(u64)root_entity,root_entity->min_start,st->vtime);
+
+	if (bfq_gt(root_entity->min_start, st->vtime))
 		return root_entity->min_start;
 
 	return st->vtime;
@@ -1438,9 +1467,14 @@ static u64 bfq_calc_vtime_jump(struct bfq_service_tree *st)
 
 static void bfq_update_vtime(struct bfq_service_tree *st, u64 new_value)
 {
+        if(open_bfqq_printk)
+	    printk("1:%s %d %s %d st:%llx st->vtime:%lld new_value:%lld\n",__func__,__LINE__,current->comm,current->pid,(u64)st,st->vtime,new_value);
 	if (new_value > st->vtime) {
-        //¸üĞÂst->vtime
 		st->vtime = new_value;
+		
+		if(open_bfqq_printk)
+	            printk("2:%s %d %s %d st:%llx st->vtime:%lld\n",__func__,__LINE__,current->comm,current->pid,(u64)st,st->vtime);
+
 		bfq_forget_idle(st);
 	}
 }
@@ -1465,11 +1499,13 @@ static struct bfq_entity *bfq_first_active_entity(struct bfq_service_tree *st,
 
 	while (node) {
 		entry = rb_entry(node, struct bfq_entity, rb_node);
+		if(open_bfqq_printk)
+			    printk("%s %d %s %d entry:%llx entry->start:%lld\n",__func__,__LINE__,current->comm,current->pid,(u64)entry,entry->start);
 left:
-		if (!bfq_gt(entry->start, vtime))//entry->start < vtime Ôòif³ÉÁ¢£¬first = entry;
+		if (!bfq_gt(entry->start, vtime))
 			first = entry;
 
-		if (node->rb_left) {//·µ»Ø×ó±ßµÄ½Úµã
+		if (node->rb_left) {
 			entry = rb_entry(node->rb_left,
 					 struct bfq_entity, rb_node);
 			if (!bfq_gt(entry->min_start, vtime)) {
@@ -1513,7 +1549,8 @@ __bfq_lookup_next_entity(struct bfq_service_tree *st, bool in_service)
 	struct bfq_entity *entity;
 	u64 new_vtime;
 
-    //st->active treeÃ»ÓĞentiryÔò·µ»ØNULL¡£next entity±ØĞë´Óst->activeµÄºìºÚÊ÷²éÑ¯Ò»¸öºÏÊÊµÄentity
+        if(open_bfqq_printk)
+	    printk("1:%s %d %s %d in_service:%d st:%llx\n",__func__,__LINE__,current->comm,current->pid,in_service,(u64)st);
 	if (RB_EMPTY_ROOT(&st->active))
 		return NULL;
 
@@ -1521,9 +1558,9 @@ __bfq_lookup_next_entity(struct bfq_service_tree *st, bool in_service)
 	 * Get the value of the system virtual time for which at
 	 * least one entity is eligible.
 	 */
-	//·µ»ØstĞéÄâÔËĞĞÊ±¼ä£¬·µ»Øroot_entity->min_start»òÕßst->vtime
 	new_vtime = bfq_calc_vtime_jump(st);
-
+        if(open_bfqq_printk)
+	    printk("2:%s %d %s %d new_vtime:%lld in_service:%d st:%llx\n",__func__,__LINE__,current->comm,current->pid,new_vtime,in_service,(u64)st);
 	/*
 	 * If there is no in-service entity for the sched_data this
 	 * active tree belongs to, then push the system virtual time
@@ -1534,12 +1571,12 @@ __bfq_lookup_next_entity(struct bfq_service_tree *st, bool in_service)
 	 * entity is not on st, because it was extracted when set in
 	 * service).
 	 */
-	//stÃ»ÓĞÕıÔÚservice µÄentity
 	if (!in_service)
 		bfq_update_vtime(st, new_vtime);
 
 	entity = bfq_first_active_entity(st, new_vtime);
-
+        if(open_bfqq_printk)
+	    printk("3:%s %d %s %d bfq_service_tree:%llx entity:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)st,(u64)entity);
 	return entity;
 }
 
@@ -1560,6 +1597,8 @@ static struct bfq_entity *bfq_lookup_next_entity(struct bfq_sched_data *sd,
 	struct bfq_entity *entity = NULL;
 	int class_idx = 0;
 
+        if(open_bfqq_printk)
+	    printk("1:%s %d %s %d\n",__func__,__LINE__,current->comm,current->pid);
 	/*
 	 * Choose from idle class, if needed to guarantee a minimum
 	 * bandwidth to this class (and if there is some active entity
@@ -1595,6 +1634,8 @@ static struct bfq_entity *bfq_lookup_next_entity(struct bfq_sched_data *sd,
 		 * __bfq_lookup_next_entity that there is no
 		 * sd->in_service_entity.
 		 */
+                if(open_bfqq_printk)
+	            printk("2:%s %d %s %d ->__bfq_lookup_next_entity()\n",__func__,__LINE__,current->comm,current->pid);
 		entity = __bfq_lookup_next_entity(st + class_idx,
 						  sd->in_service_entity &&
 						  !expiration);
@@ -1602,6 +1643,9 @@ static struct bfq_entity *bfq_lookup_next_entity(struct bfq_sched_data *sd,
 		if (entity)
 			break;
 	}
+
+        if(open_bfqq_printk)
+	    printk("3:%s %d %s %d entity:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)entity);
 
 	if (!entity)
 		return NULL;
@@ -1619,14 +1663,14 @@ bool next_queue_may_preempt(struct bfq_data *bfqd)
 /*
  * Get next queue for service.
  */
-//ºËĞÄÊÇÈ¡³ösd->next_in_service¸³ÓÚsd->in_service_entity×÷ÎªÂíÉÏÒªÊ¹ÓÃµÄentity£¬Õâ¾ÍÊÇĞÂÑ¡ÔñµÄbfq_queueµÄentity¡£×îºó´Óst²éÕÒºÏÊÊµÄ
-//entity²¢¸üĞÂµ½sd->next_in_service£¬Ã»ÓĞÕÒµ½ÔòÉèÖÃsd->next_in_serviceÎªNULL
 struct bfq_queue *bfq_get_next_queue(struct bfq_data *bfqd)
 {
 	struct bfq_entity *entity = NULL;
 	struct bfq_sched_data *sd;
 	struct bfq_queue *bfqq;
 
+	if(open_bfqq_printk)
+            printk("1:%s %d %s %d bfq_tot_busy_queues(bfqd):%d\n",__func__,__LINE__,current->comm,current->pid,bfq_tot_busy_queues(bfqd));
 	if (bfq_tot_busy_queues(bfqd) == 0)
 		return NULL;
 
@@ -1636,7 +1680,10 @@ struct bfq_queue *bfq_get_next_queue(struct bfq_data *bfqd)
 	 * way.
 	 */
 	sd = &bfqd->root_group->sched_data;
-	for (; sd ; sd = entity->my_sched_data) {//²âÊÔÊ±Õâ¸öÑ­»·Ö»Ö´ĞĞÁËÒ»´Î
+	if(open_bfqq_printk)
+            printk("2:%s %d %s %d bfq_sched_data:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)sd);
+
+	for (; sd ; sd = entity->my_sched_data) {
 		/*
 		 * WARNING. We are about to set the in-service entity
 		 * to sd->next_in_service, i.e., to the (cached) value
@@ -1662,7 +1709,8 @@ struct bfq_queue *bfq_get_next_queue(struct bfq_data *bfqd)
 		 */
 
 		/* Make next_in_service entity become in_service_entity */
-        //È¡³ösd->next_in_service×÷Îªµ±Ç°ÒªÊ¹ÓÃµÄentity£¬¸³Öµ¸øsd->in_service_entity
+		if(open_bfqq_printk)
+	            printk("3:%s %d %s %d bfq_sched_data:%llx sd->next_in_service:%llx sd->in_service_entity:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)sd,(u64)(sd->next_in_service),(u64)(sd->in_service_entity));
 		entity = sd->next_in_service;
 		sd->in_service_entity = entity;
 
@@ -1674,10 +1722,12 @@ struct bfq_queue *bfq_get_next_queue(struct bfq_data *bfqd)
 		 * comments on the function
 		 * bfq_no_longer_next_in_service() for details.
 		 */
-		//Èç¹ûÃ»ÓĞ¶àÓàµÄentity×÷Îªsd->next_in_service£¬ÔòÒª´Óst->acitve treeÌŞ³ıentity
-		if (bfq_no_longer_next_in_service(entity))
+		if (bfq_no_longer_next_in_service(entity)){
+			if(open_bfqq_printk)
+			    printk("4:%s %d %s %d if (bfq_no_longer_next_in_service(entity))\n",__func__,__LINE__,current->comm,current->pid);
 			bfq_active_extract(bfq_entity_service_tree(entity),
 					   entity);
+		}
 
 		/*
 		 * Even if entity is not to be extracted according to
@@ -1700,15 +1750,16 @@ struct bfq_queue *bfq_get_next_queue(struct bfq_data *bfqd)
 	}
 
 	bfqq = bfq_entity_to_bfqq(entity);
-
+        if(open_bfqq_printk)
+	    printk("5:%s %d %s %d entity:%llx bfqq:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)entity,(u64)bfqq);
 	/*
 	 * We can finally update all next-to-serve entities along the
 	 * path from the leaf entity just set in service to the root.
 	 */
-	for_each_entity(entity) {//forÑ­»·Ö»½øĞĞÒ»´Î
+	for_each_entity(entity) {
 		struct bfq_sched_data *sd = entity->sched_data;
-        
-        //´Óst²éÕÒºÏÊÊµÄentity²¢¸üĞÂµ½sd->next_in_service£¬Ã»ÓĞÕÒµ½ÔòÉèÖÃsd->next_in_serviceÎªNULL
+                if(open_bfqq_printk)
+		    printk("6:%s %d %s %d entity:%llx bfq_sched_data:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)entity,(u64)sd);
 		if (!bfq_update_next_in_service(sd, NULL, false))
 			break;
 	}
@@ -1726,7 +1777,8 @@ bool __bfq_bfqd_reset_in_service(struct bfq_data *bfqd)
 	bfq_clear_bfqq_wait_request(in_serv_bfqq);
 	hrtimer_try_to_cancel(&bfqd->idle_slice_timer);
 	bfqd->in_service_queue = NULL;
-
+       if(open_bfqq_printk)
+	    printk("1:%s %d %s %d bfqd->in_service_queue:%llx in_serv_entity:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)(bfqd->in_service_queue),(u64)(in_serv_entity));
 	/*
 	 * When this function is called, all in-service entities have
 	 * been properly deactivated or requeued, so we can safely
@@ -1761,15 +1813,14 @@ void bfq_deactivate_bfqq(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 			 bool ins_into_idle_tree, bool expiration)
 {
 	struct bfq_entity *entity = &bfqq->entity;
-    //1:°Ñentity´Óst->active»òst->idleºìºÚÊ÷Ìßµô£¬ins_into_idle_treeÎªtrueÔò°ÑentityÔÙ²åÈëst->idleÊ÷£¬·ñÔòÖ±½ÓÊÍ·Åµôentity¼°bfqq¡£
-    //2:¼ÆËãentityµÄĞéÄâÔËĞĞÊ±¼ä²¢ÀÛ¼Óµ½entity->finish£¬×îºó°Ñentity°´ÕÕĞÂµÄentity->finish²åÈëst->activeºìºÚÊ÷
+
 	bfq_deactivate_entity(entity, ins_into_idle_tree, expiration);
 }
 
 void bfq_activate_bfqq(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 {
 	struct bfq_entity *entity = &bfqq->entity;
-    //°Ñbfqq²åÈëµ½st->activeºìºÚÊ÷
+
 	bfq_activate_requeue_entity(entity, bfq_bfqq_non_blocking_wait_rq(bfqq),
 				    false, false);
 	bfq_clear_bfqq_non_blocking_wait_rq(bfqq);
@@ -1779,9 +1830,7 @@ void bfq_requeue_bfqq(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 		      bool expiration)
 {
 	struct bfq_entity *entity = &bfqq->entity;
-   //Èç¹ûentityÊÇµ÷¶ÈÆ÷ÕıÔÚÊ¹ÓÃµÄentiry»òentity´¦ÓÚst->activeÊ÷,¼ÆËãentityµÄĞéÄâÔËĞĞÊ±¼ä²¢ÀÛ¼Óµ½entity->finish£¬°Ñentity°´ÕÕĞÂµÄ
-   //entity->finish²åÈëst->activeºìºÚÊ÷¡£·ñÔò¼ÆËãĞÂµÄentity->start£¬°´ÕÕentity->budget¼ÆËãentityµÄĞéÄâÔËĞĞÊ±¼ä²¢ÀÛ¼Óµ½entity->finish£¬
-   //×îºó°Ñentity°´ÕÕentity->finish²åÈëst->active tree¡£×îºó´Óst²éÕÒºÏÊÊµÄentity²¢¸üĞÂµ½sd->next_in_service
+
 	bfq_activate_requeue_entity(entity, false,
 				    bfqq == bfqd->in_service_queue, expiration);
 }
@@ -1791,12 +1840,11 @@ void bfq_requeue_bfqq(struct bfq_data *bfqd, struct bfq_queue *bfqq,
  * the service tree. As a special case, it can be invoked during an
  * expiration.
  */
-//bfqqÃ»ÓĞreqÅÉ·¢ÁË»òÕßbfqqÊ§Ğ§ÁË£¬ÇåÀíbfqqµÄbusy×´Ì¬£¬°Ñbfqq(entity)´Óst->active»òst->idleºìºÚÊ÷Ìßµô£¬ÓĞ¿ÉÄÜÔÙ°Ñbfqq²åÈëµ½st->idleºìºÚÊ÷
 void bfq_del_bfqq_busy(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 		       bool expiration)
 {
 	bfq_log_bfqq(bfqd, bfqq, "del from busy");
-    //ÇåÀíbfqq busy×´Ì¬
+
 	bfq_clear_bfqq_busy(bfqq);
 
 	bfqd->busy_queues[bfqq->ioprio_class - 1]--;
@@ -1804,12 +1852,12 @@ void bfq_del_bfqq_busy(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 	if (bfqq->wr_coeff > 1)
 		bfqd->wr_busy_queues--;
 
+       if(open_bfqq_printk)
+	   printk("%s %d %s %d bfqq:%llx expiration:%d bfqq->wr_coeff:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,expiration,bfqq->wr_coeff);
 	bfqg_stats_update_dequeue(bfqq_group(bfqq));
-    //1:°Ñentity´Óst->active»òst->idleºìºÚÊ÷Ìßµô£¬ins_into_idle_treeÎªtrueÔò°ÑentityÔÙ²åÈëst->idleÊ÷£¬·ñÔòÖ±½ÓÊÍ·Åµôentity¼°bfqq¡£
-    //2:¼ÆËãentityµÄĞéÄâÔËĞĞÊ±¼ä²¢ÀÛ¼Óµ½entity->finish£¬×îºó°Ñentity°´ÕÕĞÂµÄentity->finish²åÈëst->activeºìºÚÊ÷
+
 	bfq_deactivate_bfqq(bfqd, bfqq, true, expiration);
 
-    //bfqqÉÏÃ»ÓĞÅÉ·¢reqÊ±,¶Ôbfq_weight_counterµÄ³ÉÔ±´Óqueue_weights_treeÖĞÖ´ĞĞremove
 	if (!bfqq->dispatched)
 		bfq_weights_tree_remove(bfqd, bfqq);
 }
@@ -1817,14 +1865,15 @@ void bfq_del_bfqq_busy(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 /*
  * Called when an inactive queue receives a new request.
  */
-//°Ñbfqq²åÈëµ½st->activeºìºÚÊ÷£¬±ê¼Çbfqq busy
 void bfq_add_bfqq_busy(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 {
 	bfq_log_bfqq(bfqd, bfqq, "add to busy");
-    //°Ñbfqq²åÈëµ½st->activeºìºÚÊ÷
+
+        if(open_bfqq_printk)
+	            printk("%s %d %s %d bfqq:%llx ->bfq_activate_bfqq()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
 	bfq_activate_bfqq(bfqd, bfqq);
 
-	bfq_mark_bfqq_busy(bfqq);//±ê¼Çbfqq busy
+	bfq_mark_bfqq_busy(bfqq);
 	bfqd->busy_queues[bfqq->ioprio_class - 1]++;
 
 	if (!bfqq->dispatched)
