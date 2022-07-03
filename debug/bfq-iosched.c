@@ -433,6 +433,8 @@ static struct bfq_io_cq *bfq_bic_lookup(struct bfq_data *bfqd,
 void bfq_schedule_dispatch(struct bfq_data *bfqd)
 {
 	if (bfqd->queued != 0) {
+                if(open_bfqq_printk)
+	            printk("1:%s %d %s %d\n",__func__,__LINE__,current->comm,current->pid);
 		bfq_log(bfqd, "schedule dispatch");
 		blk_mq_run_hw_queues(bfqd->queue, true);
 	}
@@ -963,6 +965,8 @@ static void bfq_updated_next_req(struct bfq_data *bfqd,
 	struct request *next_rq = bfqq->next_rq;
 	unsigned long new_budget;
 
+	if(open_bfqq_printk)
+		    printk("1:%s %d %s %d bfqq:%llx  bfqq->next_rq:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,(u64)(bfqq->next_rq));
 	if (!next_rq)
 		return;
 
@@ -1815,8 +1819,14 @@ static void bfq_bfqq_handle_idle_busy_switch(struct bfq_data *bfqd,
 	      bfqq->wr_coeff >= bfqd->in_service_queue->wr_coeff) ||
 	     bfq_bfqq_higher_class_or_weight(bfqq, bfqd->in_service_queue)) &&
 	    next_queue_may_preempt(bfqd))
-		bfq_bfqq_expire(bfqd, bfqd->in_service_queue,
+	{
+		
+            if(open_bfqq_printk)
+	           printk("3:%s %d %s %d bfqq:%llx bfqd->in_service_queue:%llx ----->bfq_bfqq_expire()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,(u64)(bfqd->in_service_queue));
+
+	    bfq_bfqq_expire(bfqd, bfqd->in_service_queue,
 				false, BFQQE_PREEMPTED);
+	}
 }
 
 static void bfq_reset_inject_limit(struct bfq_data *bfqd,
@@ -4041,9 +4051,9 @@ void bfq_bfqq_expire(struct bfq_data *bfqd,
 	    (slow ||
 	     (reason == BFQQE_BUDGET_TIMEOUT &&
 	      bfq_bfqq_budget_left(bfqq) >=  entity->budget / 3))){
-		bfq_bfqq_charge_time(bfqd, bfqq, delta);
 		if(open_bfqq_printk)
 			  printk("1:%s %d %s %d bfqq:%llx if (bfqq->wr_coeff == 1 &&.........\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
+		bfq_bfqq_charge_time(bfqd, bfqq, delta);
 	}
 
 	if (reason == BFQQE_TOO_IDLE &&
@@ -4469,6 +4479,8 @@ static struct bfq_queue *bfq_select_queue(struct bfq_data *bfqd)
 
 	bfq_log_bfqq(bfqd, bfqq, "select_queue: already in-service queue");
 
+	if(open_bfqq_printk)
+	    printk("1_1:%s %d %s %d bfqq:%llx bfqd->in_service_queue:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,(u64)bfqd->in_service_queue);
 	/*
 	 * Do not expire bfqq for budget timeout if bfqq may be about
 	 * to enjoy device idling. The reason why, in this case, we
@@ -4906,6 +4918,8 @@ start_rq:
 		rq->rq_flags |= RQF_STARTED;
 	}
 exit:
+	if(open_bfqq_printk)
+	    printk("5:%s %d %s %d bfqq:%llx req:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,(u64)rq);
 	return rq;
 }
 
@@ -5117,6 +5131,8 @@ static void bfq_exit_icq_bfqq(struct bfq_io_cq *bic, bool is_sync)
 	if (bfqq && bfqd) {
 		unsigned long flags;
 
+	        if(open_bfqq_printk)
+	            printk("1:%s %d %s %d bfqq:%llx bic:%llx is_sync:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,(u64)bic,is_sync);
 		spin_lock_irqsave(&bfqd->lock, flags);
 		bfq_exit_bfqq(bfqd, bfqq);
 		bic_set_bfqq(bic, NULL, is_sync);
@@ -5128,6 +5144,8 @@ static void bfq_exit_icq(struct io_cq *icq)
 {
 	struct bfq_io_cq *bic = icq_to_bic(icq);
 
+	if(open_bfqq_printk)
+	    printk("1:%s %d %s %d\n",__func__,__LINE__,current->comm,current->pid);
 	bfq_exit_icq_bfqq(bic, true);
 	bfq_exit_icq_bfqq(bic, false);
 }
@@ -5583,8 +5601,13 @@ static void bfq_rq_enqueued(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 		 * See [1] for more details.
 		 */
 		if (budget_timeout)
+		{
+                       if(open_bfqq_printk)
+	                   printk("3:%s %d %s %d bfqq:%llx  ->bfq_bfqq_expire()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
+
 			bfq_bfqq_expire(bfqd, bfqq, false,
 					BFQQE_BUDGET_TIMEOUT);
+		}
 	}
 }
 
@@ -5911,14 +5934,22 @@ static void bfq_completed_request(struct bfq_queue *bfqq, struct bfq_data *bfqd)
 			 * of its reserved service guarantees.
 			 */
 			return;
-		} else if (bfq_may_expire_for_budg_timeout(bfqq))
+		} else if (bfq_may_expire_for_budg_timeout(bfqq)){
+
+                        if(open_bfqq_printk)
+	                    printk("6:%s %d %s %d bfqq:%llx ->bfq_bfqq_expire()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
 			bfq_bfqq_expire(bfqd, bfqq, false,
 					BFQQE_BUDGET_TIMEOUT);
+		}
 		else if (RB_EMPTY_ROOT(&bfqq->sort_list) &&
 			 (bfqq->dispatched == 0 ||
-			  !bfq_better_to_idle(bfqq)))
+			  !bfq_better_to_idle(bfqq))){
+                        if(open_bfqq_printk)
+	                    printk("7:%s %d %s %d bfqq:%llx ->bfq_bfqq_expire()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
+
 			bfq_bfqq_expire(bfqd, bfqq, false,
 					BFQQE_NO_MORE_REQUESTS);
+		}
 	}
 
 	if (!bfqd->rq_in_driver)
@@ -6468,6 +6499,8 @@ bfq_idle_slice_timer_body(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 	enum bfqq_expiration reason;
 	unsigned long flags;
 
+        if(open_bfqq_printk)
+	      printk("1:%s %d %s %d bfqq:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
 	spin_lock_irqsave(&bfqd->lock, flags);
 
 	/*
@@ -6501,6 +6534,9 @@ bfq_idle_slice_timer_body(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 		reason = BFQQE_TOO_IDLE;
 	else
 		goto schedule_dispatch;
+
+        if(open_bfqq_printk)
+	    printk("2:%s %d %s %d bfqq:%llx ->bfq_bfqq_expire()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
 
 	bfq_bfqq_expire(bfqd, bfqq, true, reason);
 

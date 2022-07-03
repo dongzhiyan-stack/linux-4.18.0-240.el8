@@ -1891,7 +1891,7 @@ static void bfq_reset_inject_limit(struct bfq_data *bfqd,
 
 	bfqq->decrease_time_jif = jiffies;
 }
-//把req添加到bfqq->sort_list链表，并选择合适的req赋于bfqq->next_rq
+//把req添加到bfqq->sort_list链表，并选择合适的req赋于bfqq->next_rq。可能激活bfqq，把bfqq添加到st->active tree
 static void bfq_add_request(struct request *rq)
 {
     //通过rq->elv.priv[1]得到保存的bfqq
@@ -2098,7 +2098,7 @@ static void bfq_add_request(struct request *rq)
 	if (unlikely(!bfqd->nonrot_with_queueing && prev != bfqq->next_rq))
 		bfq_pos_tree_add_move(bfqd, bfqq);
 
-	if (!bfq_bfqq_busy(bfqq)) /* switching to busy ... */ //测试有成立
+	if (!bfq_bfqq_busy(bfqq)) /* switching to busy ... */ //激活bfqq，把bfqq添加到st->active tree
 		bfq_bfqq_handle_idle_busy_switch(bfqd, bfqq, old_wr_coeff,
 						 rq, &interactive);
 	else {
@@ -2218,7 +2218,7 @@ static void bfq_remove_request(struct request_queue *q,
 
         //如果bfqq有busy状态并且bfqq不是bfqd->in_service_queue正在使用的bfqq
 		if (bfq_bfqq_busy(bfqq) && bfqq != bfqd->in_service_queue) {
-            //bfqq没有req派发了，清理bfqq的busy状态，把bfqq(entity)从st->active或st->idle红黑树踢掉，有可能再把bfqq插入到st->idle红黑树
+            //bfqq没有req派发了，清理bfqq的busy状态，把bfqq(entity)从st->active红黑树踢掉，有可能再把bfqq插入到st->idle红黑树
 			bfq_del_bfqq_busy(bfqd, bfqq, false);
 			/*
 			 * bfqq emptied. In normal operation, when
@@ -3522,8 +3522,8 @@ static bool idling_needed_for_service_guarantees(struct bfq_data *bfqd,
 		 bfqq->dispatched + 4)) ||
 		bfq_asymmetric_scenario(bfqd, bfqq);
 }
-//因bfqq的entity配额被消耗光或者bfqq没有要派发的req了等原因，则bfqq的entity会从st->active或st->idle 树被踢掉。接着计算entity
-//的虚拟运行时间并更新到entity->finish，把entity重新加入st->active树。如果bfqq不会再被调度，可能把entity及bfqq释放掉。
+/*bfqq的entity配额被消耗光了或者bfqq没有可派发的req了等等，bfqq的entity会从st->active红黑树踢掉。接着计算entity的虚拟
+运行时间并更新到entity->finish，把entity重新加入st->idle或st->active红黑树。如果bfqq不会再被调度，可能把entity及bfqq释放掉。*/
 static bool __bfq_bfqq_expire(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 			      enum bfqq_expiration reason)
 {
@@ -4014,6 +4014,7 @@ void bfq_bfqq_expire(struct bfq_data *bfqd,
 	    (slow ||
 	     (reason == BFQQE_BUDGET_TIMEOUT &&
 	      bfq_bfqq_budget_left(bfqq) >=  entity->budget / 3)))
+	    //会执行bfq_bfqq_served()增加entity配额entity->service和调度器虚拟运行时间st->vtime
 		bfq_bfqq_charge_time(bfqd, bfqq, delta);
 
 	if (reason == BFQQE_TOO_IDLE &&
@@ -4084,8 +4085,8 @@ void bfq_bfqq_expire(struct bfq_data *bfqd,
     //保证bfqq的配额还能传输完next_rq
 	__bfq_bfqq_recalc_budget(bfqd, bfqq, reason);
     
-    //因bfqq的entity配额被消耗光或者bfqq没有要派发的req了等原因，则bfqq的entity会从st->active或st->idle 树被踢掉。接着计算entity
-    //的虚拟运行时间并更新到entity->finish，把entity重新加入st->active树。如果bfqq不会再被调度，可能把entity及bfqq释放掉。
+    /*bfqq的entity配额被消耗光了或者bfqq没有可派发的req了等等，bfqq的entity会从st->active红黑树踢掉。接着计算entity的虚拟
+    运行时间并更新到entity->finish，把entity重新加入st->idle或st->active红黑树。如果bfqq不会再被调度，可能把entity及bfqq释放掉。*/
 	if (__bfq_bfqq_expire(bfqd, bfqq, reason))
 		/* bfqq is gone, no more actions on it */
 		return;
@@ -4732,7 +4733,7 @@ static struct request *bfq_dispatch_rq_from_bfqq(struct bfq_data *bfqd,
 	 * belongs to CLASS_IDLE and other queues are waiting for
 	 * service.
 	 */
-	if (!(bfq_tot_busy_queues(bfqd) > 1 && bfq_class_idle(bfqq)))
+	if (!(bfq_tot_busy_queues(bfqd) > 1 && bfq_class_idle(bfqq)))//这个if一般都成立
 		goto return_rq;
     
   //bfqq的entity配额被消耗光了，bfqq的entity会从st->active或st->idle树被踢掉。接着计算entity的虚拟运行时间并更新到entity->finish，
@@ -5517,7 +5518,7 @@ static void bfq_rq_enqueued(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 					BFQQE_BUDGET_TIMEOUT);
 	}
 }
-//req插入bfqq->sort_list和bfqq->fifo链表，并选择设置下一次派发的req于bfqq->next_rq
+//把req添加到bfqq->sort_list链表，并选择合适的req赋于bfqq->next_rq。可能激活bfqq，把bfqq添加到st->active tree
 /* returns true if it causes the idle timer to be disabled */
 static bool __bfq_insert_request(struct bfq_data *bfqd, struct request *rq)
 {
@@ -5562,7 +5563,7 @@ static bool __bfq_insert_request(struct bfq_data *bfqd, struct request *rq)
 	bfq_update_io_seektime(bfqd, bfqq, rq);
 
 	waiting = bfqq && bfq_bfqq_wait_request(bfqq);
-    //把req添加到bfqq->sort_list链表，并选择合适的req赋于bfqq->next_rq
+    //把req添加到bfqq->sort_list链表，并选择合适的req赋于bfqq->next_rq。可能激活bfqq，把bfqq添加到st->active tree
 	bfq_add_request(rq);
 	idle_timer_disabled = waiting && !bfq_bfqq_wait_request(bfqq);
     //计算req的fifo超时时间
@@ -5833,7 +5834,7 @@ static void bfq_completed_request(struct bfq_queue *bfqq, struct bfq_data *bfqd)
 		} else if (bfq_may_expire_for_budg_timeout(bfqq))
 			bfq_bfqq_expire(bfqd, bfqq, false,
 					BFQQE_BUDGET_TIMEOUT);
-		else if (RB_EMPTY_ROOT(&bfqq->sort_list) &&
+		else if (RB_EMPTY_ROOT(&bfqq->sort_list) &&//这里抓到过成立
 			 (bfqq->dispatched == 0 ||
 			  !bfq_better_to_idle(bfqq)))
 			bfq_bfqq_expire(bfqd, bfqq, false,

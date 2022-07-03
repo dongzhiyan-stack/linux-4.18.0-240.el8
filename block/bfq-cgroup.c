@@ -426,7 +426,7 @@ void bfq_init_entity(struct bfq_entity *entity, struct bfq_group *bfqg)
 	entity->weight = entity->new_weight;
 	entity->orig_weight = entity->new_weight;
 	if (bfqq) {
-		bfqq->ioprio = bfqq->new_ioprio;
+		bfqq->ioprio = bfqq->new_ioprio;//bfq调度优先级
 		bfqq->ioprio_class = bfqq->new_ioprio_class;
 		/*
 		 * Make sure that bfqg and its associated blkg do not
@@ -1075,7 +1075,7 @@ static ssize_t bfq_io_set_weight(struct kernfs_open_file *of,
 	return bfq_io_set_device_weight(of, buf, nbytes, off);
 }
 
-#ifdef CONFIG_BFQ_CGROUP_DEBUG
+#ifdef CONFIG_BFQ_CGROUP_DEBUG//no
 static int bfqg_print_stat(struct seq_file *sf, void *v)
 {
 	blkcg_print_blkgs(sf, css_to_blkcg(seq_css(sf)), blkg_prfill_stat,
@@ -1368,7 +1368,7 @@ struct cftype bfq_blkg_files[] = {
 void bfq_bfqq_move(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 		   struct bfq_group *bfqg) {}
 
-void bfq_init_entity(struct bfq_entity *entity, struct bfq_group *bfqg)
+void bfq_init_entity(struct bfq_entity *entity, struct bfq_group *bfqg)//yes
 {
 	struct bfq_queue *bfqq = bfq_entity_to_bfqq(entity);
 
@@ -1378,6 +1378,7 @@ void bfq_init_entity(struct bfq_entity *entity, struct bfq_group *bfqg)
 		bfqq->ioprio = bfqq->new_ioprio;
 		bfqq->ioprio_class = bfqq->new_ioprio_class;
 	}
+    //entity->sched_data来自bfq_group的sched_data
 	entity->sched_data = &bfqg->sched_data;
 }
 
