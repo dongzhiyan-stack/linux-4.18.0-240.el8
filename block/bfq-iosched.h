@@ -327,9 +327,11 @@ struct bfq_queue {
 	int max_budget;
 	/* budget expiration (in jiffies) */
     //bfq_init_bfqq()中赋初值。bfq_bfqq_budget_timeout()中判断bfqq->budget_timeout大于jiffies,则bfqq运行时间太长了，该bfqq要失效了
-	unsigned long budget_timeout;//bfq_completed_request当req传输完成赋值jiffies
+    //bfq_completed_request当req传输完成赋值jiffies。bfq_set_budget_timeout()设置bfqq的超时时间
+	unsigned long budget_timeout;
 
 	/* number of requests on the dispatch list or inside driver */
+    //还没有传输完成的IO请求个数，为0表示所有的IO请求都传输完成了，跟bfqd->rq_in_driver类似
 	int dispatched;//bfq_dispatch_remove()每派发一个req则dispatched加1,bfq_completed_request()中传输完成一个req减1
 
 	/* status flags */
@@ -390,7 +392,7 @@ struct bfq_queue {
 	/* factor by which the weight of this queue is multiplied */
     //bfq_dispatch_rq_from_bfqq->bfq_update_wr_data-> bfq_bfqq_end_wr中更新为1
     //bfq_dispatch_rq_from_bfqq->bfq_update_wr_data->switch_back_to_interactive_wr中更新为bfqd->bfq_wr_coeff
-	unsigned int wr_coeff;//测试时有30或1
+	unsigned int wr_coeff;//测试时有30或1，bfq_init_bfqq()初值是1
 	/*
 	 * Time of the last transition of the @bfq_queue from idle to
 	 * backlogged.
@@ -585,7 +587,7 @@ struct bfq_data {
 	/* number of queued requests */
 	int queued;//bfq_add_request()中加1，，bfq_remove_request()减1
 	/* number of requests dispatched and waiting for completion */
-	int rq_in_driver;//已经派发但是还没传输完成的req个数，bfq_completed_request()中减1
+	int rq_in_driver;//已经派发但是还没传输完成的req个数，bfq_completed_request()中减1，__bfq_dispatch_request()中加1
 
 	/* true if the device is non rotational and performs queueing */
 	bool nonrot_with_queueing;
@@ -601,20 +603,20 @@ struct bfq_data {
 	int hw_tag;
 
 	/* number of budgets assigned */
-	int budgets_assigned;
+	int budgets_assigned;//__bfq_set_in_service_queue()
 
 	/*
 	 * Timer set when idling (waiting) for the next request from
 	 * the queue in service.
 	 */
-	struct hrtimer idle_slice_timer;
+	struct hrtimer idle_slice_timer;//ilde定时器，bfq_arm_slice_timer()中启动，定时器函数是 bfq_idle_slice_timer()
 
 	/* bfq_queue in service */
     //__bfq_dispatch_request()->bfq_select_queue()->__bfq_set_in_service_queue()中设置
 	struct bfq_queue *in_service_queue;//bfqd当前正在使用的bfqq。__bfq_bfqd_reset_in_service()中置NULL
 
 	/* on-disk position of the last served request */
-	sector_t last_position;//bfq_update_peak_rate()等于要派发的req的结束扇区
+	sector_t last_position;//bfq_update_peak_rate()等于要本次要派发的req的结束扇区
 
 	/* position of the last served request for the in-service queue */
 	sector_t in_serv_last_pos;//bfq_update_peak_rate()中更新，上一次要派发的req的扇区结束地址
@@ -649,16 +651,16 @@ struct bfq_data {
 	/* time of first rq dispatch in current observation interval (ns) */
 	u64 first_dispatch;//bfq_reset_rate_computation()中更新
 	/* time of last rq dispatch in current observation interval (ns) */
-	u64 last_dispatch;//bfq_update_peak_rate()中记录要派发的req的时间
+	u64 last_dispatch;//bfq_update_peak_rate()中记录本次派发req的时间
 
 	/* beginning of the last budget */
-	ktime_t last_budget_start;
+	ktime_t last_budget_start;//bfq_set_budget_timeout()中设置为当前时间
 	/* beginning of the last idle slice */
 	ktime_t last_idling_start;
 	unsigned long last_idling_start_jiffies;
 
 	/* number of samples in current observation interval */
-	int peak_rate_samples;//bfq_dispatch_remove->bfq_update_peak_rate 中加1,好像是每派发一个req加1
+	int peak_rate_samples;//bfq_dispatch_remove->bfq_update_peak_rate()中每派发一个IO请求则加1
 	/* num of samples of seq dispatches in current observation interval */
 	u32 sequential_samples;
 	/* total num of sectors transferred in current observation interval */

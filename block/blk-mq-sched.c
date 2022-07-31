@@ -40,20 +40,24 @@ void blk_mq_sched_assign_ioc(struct request *rq)
 	/*
 	 * May not have an IO context if it's a passthrough request
 	 */
+	//取出进程ioc
 	ioc = current->io_context;
 	if (!ioc)
 		return;
 
 	spin_lock_irq(&q->queue_lock);
+    //由ioc找到icq
 	icq = ioc_lookup_icq(ioc, q);
 	spin_unlock_irq(&q->queue_lock);
 
 	if (!icq) {
+        //分配icq并把icq按照request_queue ID插入 ioc->icq_tree树
 		icq = ioc_create_icq(ioc, q, GFP_ATOMIC);
 		if (!icq)
 			return;
 	}
 	get_io_context(icq->ioc);
+    //icq赋于rq->elv.icq
 	rq->elv.icq = icq;
 }
 

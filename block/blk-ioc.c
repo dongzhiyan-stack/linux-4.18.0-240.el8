@@ -246,12 +246,12 @@ void ioc_clear_queue(struct request_queue *q)
 
 	__ioc_clear_queue(&icq_list);
 }
-
+//分配ioc并赋于task->io_context
 int create_task_io_context(struct task_struct *task, gfp_t gfp_flags, int node)
 {
 	struct io_context *ioc;
 	int ret;
-
+    //分配ioc
 	ioc = kmem_cache_alloc_node(iocontext_cachep, gfp_flags | __GFP_ZERO,
 				    node);
 	if (unlikely(!ioc))
@@ -276,7 +276,7 @@ int create_task_io_context(struct task_struct *task, gfp_t gfp_flags, int node)
 	task_lock(task);
 	if (!task->io_context &&
 	    (task == current || !(task->flags & PF_EXITING)))
-		task->io_context = ioc;
+		task->io_context = ioc;//ioc赋于task->io_context
 	else
 		kmem_cache_free(iocontext_cachep, ioc);
 
@@ -345,9 +345,11 @@ struct io_cq *ioc_lookup_icq(struct io_context *ioc, struct request_queue *q)
 	icq = rcu_dereference(ioc->icq_hint);
 	if (icq && icq->q == q)
 		goto out;
-
+    //以request_queue->id这个块设备队列索引在ioc->icq_tree 中找到icq。ioc我猜测代表当前进程读写的块设备的总结构，
+    //一个进程可能会读写多个块设备的文件系统，每个块设备对应进程都有一个icq，以块设备运行队列q->id插入到ioc->icq_tree这个redix tree 
 	icq = radix_tree_lookup(&ioc->icq_tree, q->id);
 	if (icq && icq->q == q)
+        //ioc->icq_hint保存当前进程正在读取的块设备结构icq
 		rcu_assign_pointer(ioc->icq_hint, icq);	/* allowed to race */
 	else
 		icq = NULL;
@@ -369,6 +371,7 @@ EXPORT_SYMBOL(ioc_lookup_icq);
  * The caller is responsible for ensuring @ioc won't go away and @q is
  * alive and will stay alive until this function returns.
  */
+//分配icq并把icq按照request_queue ID插入 ioc->icq_tree树
 struct io_cq *ioc_create_icq(struct io_context *ioc, struct request_queue *q,
 			     gfp_t gfp_mask)
 {
@@ -376,6 +379,7 @@ struct io_cq *ioc_create_icq(struct io_context *ioc, struct request_queue *q,
 	struct io_cq *icq;
 
 	/* allocate stuff */
+    //分配icq
 	icq = kmem_cache_alloc_node(et->icq_cache, gfp_mask | __GFP_ZERO,
 				    q->node);
 	if (!icq)
@@ -385,7 +389,7 @@ struct io_cq *ioc_create_icq(struct io_context *ioc, struct request_queue *q,
 		kmem_cache_free(et->icq_cache, icq);
 		return NULL;
 	}
-
+    //ioc赋值给icq->ioc
 	icq->ioc = ioc;
 	icq->q = q;
 	INIT_LIST_HEAD(&icq->q_node);
@@ -394,7 +398,7 @@ struct io_cq *ioc_create_icq(struct io_context *ioc, struct request_queue *q,
 	/* lock both q and ioc and try to link @icq */
 	spin_lock_irq(&q->queue_lock);
 	spin_lock(&ioc->lock);
-
+    //icq按照request_queue ID插入 ioc->icq_tree树
 	if (likely(!radix_tree_insert(&ioc->icq_tree, q->id, icq))) {
 		hlist_add_head(&icq->ioc_node, &ioc->icq_list);
 		list_add(&icq->q_node, &q->icq_list);

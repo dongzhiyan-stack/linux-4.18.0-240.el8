@@ -111,7 +111,7 @@ static inline u64 get_jiffies_64(void)
 #define time_after_eq(a,b)	\
 	(typecheck(unsigned long, a) && \
 	 typecheck(unsigned long, b) && \
-	 ((long)((a) - (b)) >= 0))
+	 ((long)((a) - (b)) >= 0))//前大于后返回true
 #define time_before_eq(a,b)	time_after_eq(b,a)
 
 /*
@@ -152,6 +152,7 @@ static inline u64 get_jiffies_64(void)
  */
 
 /* time_is_before_jiffies(a) return true if a is before jiffies */
+//a < jiffies 返回true
 #define time_is_before_jiffies(a) time_after(jiffies, a)
 #define time_is_before_jiffies64(a) time_after64(get_jiffies_64(), a)
 
@@ -160,6 +161,7 @@ static inline u64 get_jiffies_64(void)
 #define time_is_after_jiffies64(a) time_before64(get_jiffies_64(), a)
 
 /* time_is_before_eq_jiffies(a) return true if a is before or equal to jiffies*/
+//a<=jiffies 返回true
 #define time_is_before_eq_jiffies(a) time_after_eq(jiffies, a)
 #define time_is_before_eq_jiffies64(a) time_after_eq64(get_jiffies_64(), a)
 

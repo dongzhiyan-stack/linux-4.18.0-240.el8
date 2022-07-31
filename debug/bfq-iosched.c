@@ -982,6 +982,9 @@ static void bfq_updated_next_req(struct bfq_data *bfqd,
 				 bfq_serv_to_charge(next_rq, bfqq)),
 			   entity->service);
 	if (entity->budget != new_budget) {
+	        if(open_bfqq_printk)
+		    printk("2:%s %d %s %d bfqq:%llx bfqq->max_budget:%d new_budget:%ld entity->service:%d new_budget:%ld ->bfq_requeue_bfqq()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->max_budget,new_budget,entity->service,new_budget);
+
 		entity->budget = new_budget;
 		bfq_log_bfqq(bfqd, bfqq, "updated next rq: new budget %lu",
 					 new_budget);
@@ -1357,6 +1360,8 @@ static int bfq_max_budget(struct bfq_data *bfqd)
  */
 static int bfq_min_budget(struct bfq_data *bfqd)
 {
+        if(open_bfqq_printk)
+	    printk("%s %d %s %d bfqd->budgets_assigned:%d bfq_stats_min_budgets:%d bfqd->bfq_max_budget:%d\n",__func__,__LINE__,current->comm,current->pid,bfqd->budgets_assigned,bfq_stats_min_budgets,bfqd->bfq_max_budget);
 	if (bfqd->budgets_assigned < bfq_stats_min_budgets)
 		return bfq_default_max_budget / 32;
 	else
@@ -2136,8 +2141,11 @@ static void bfq_add_request(struct request *rq)
 			bfqd->wr_busy_queues++;
 			bfqq->entity.prio_changed = 1;
 		}
-		if (prev != bfqq->next_rq)
+		if (prev != bfqq->next_rq){
+		        if(open_bfqq_printk)
+		            printk("9_1:%s %d %s %d ->bfq_updated_next_req()\n",__func__,__LINE__,current->comm,current->pid);
 			bfq_updated_next_req(bfqd, bfqq);
+		}
 	}
 
 	/*
@@ -2224,6 +2232,8 @@ static void bfq_remove_request(struct request_queue *q,
 		    printk("1:%s %d %s %d bfqq:%llx rq:%llx bfqq->next_rq:%llx sync:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,(u64)rq,(u64)(bfqq->next_rq),sync);
 	if (bfqq->next_rq == rq) {
 		bfqq->next_rq = bfq_find_next_rq(bfqd, bfqq, rq);
+	        if(open_bfqq_printk)
+		    printk("1_1:%s %d %s %d bfqq:%llx bfqq->next_rq:%llx ->bfq_updated_next_req()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,(u64)(bfqq->next_rq));
 		bfq_updated_next_req(bfqd, bfqq);
 	}
 
@@ -2362,6 +2372,8 @@ static void bfq_request_merged(struct request_queue *q, struct request *req,
 		 * rq_pos_tree.
 		 */
 		if (prev != bfqq->next_rq) {
+	                if(open_bfqq_printk)
+                            printk("1:%s %d %s %d bfqq:%llx req:%llx prev_bfqq->next_rq:%llx bfqq->next_rq:%llx ->bfq_updated_next_req()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,(u64)req,(u64)prev,(u64)(bfqq->next_rq));
 			bfq_updated_next_req(bfqd, bfqq);
 			/*
 			 * See comments on bfq_pos_tree_add_move() for
@@ -2956,6 +2968,9 @@ static void bfq_set_budget_timeout(struct bfq_data *bfqd,
 
 	bfqq->budget_timeout = jiffies +
 		bfqd->bfq_timeout * timeout_coeff;
+
+       if(open_bfqq_printk)
+           printk("%s %d %s %d bfqq:%llx bfqq->budget_timeout:%ld timeout_coeff:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->budget_timeout,timeout_coeff);
 }
 
 static void __bfq_set_in_service_queue(struct bfq_data *bfqd,
@@ -3083,6 +3098,9 @@ static void update_thr_responsiveness_params(struct bfq_data *bfqd)
 	if (bfqd->bfq_user_max_budget == 0) {
 		bfqd->bfq_max_budget =
 			bfq_calc_max_budget(bfqd);
+
+           if(open_bfqq_printk)
+               printk("1:%s %d %s %d bfqd->bfq_max_budget:%d\n",__func__,__LINE__,current->comm,current->pid,bfqd->bfq_max_budget);
 		bfq_log(bfqd, "new max_budget = %d", bfqd->bfq_max_budget);
 	}
 }
@@ -3118,7 +3136,8 @@ static void bfq_update_rate_reset(struct bfq_data *bfqd, struct request *rq)
 	 * for a new evaluation attempt.
 	 */
 	if(open_bfqq_printk)
-		    printk("%s %d %s %d\n",__func__,__LINE__,current->comm,current->pid);
+            printk("1:%s %d %s %d bfqd->last_completion:%lld bfqd->first_dispatch:%lld bfqd->peak_rate_samples:%d bfqd->sequential_samples:%d bfqd->delta_from_first:%lld\n",__func__,__LINE__,current->comm,current->pid,bfqd->last_completion,bfqd->first_dispatch,bfqd->peak_rate_samples,bfqd->sequential_samples,bfqd->delta_from_first);
+
 	if (bfqd->peak_rate_samples < BFQ_RATE_MIN_SAMPLES ||
 	    bfqd->delta_from_first < BFQ_RATE_MIN_INTERVAL)
 		goto reset_computation;
@@ -3140,6 +3159,8 @@ static void bfq_update_rate_reset(struct bfq_data *bfqd, struct request *rq)
 	rate = div64_ul(bfqd->tot_sectors_dispatched<<BFQ_RATE_SHIFT,
 			div_u64(bfqd->delta_from_first, NSEC_PER_USEC));
 
+	if(open_bfqq_printk)
+            printk("2:%s %d %s %d bfqd->tot_sectors_dispatched:%lld bfqd->delta_from_first:%lld rate:%d\n",__func__,__LINE__,current->comm,current->pid,bfqd->tot_sectors_dispatched,bfqd->delta_from_first,rate);
 	/*
 	 * Peak rate not updated if:
 	 * - the percentage of sequential dispatches is below 3/4 of the
@@ -3175,6 +3196,8 @@ static void bfq_update_rate_reset(struct bfq_data *bfqd, struct request *rq)
 	 * incremented for the first sample.
 	 */
 	weight = (9 * bfqd->sequential_samples) / bfqd->peak_rate_samples;
+	if(open_bfqq_printk)
+            printk("3:%s %d %s %d bfqd->delta_from_first:%lld weight:%d\n",__func__,__LINE__,current->comm,current->pid,bfqd->delta_from_first,weight);
 
 	/*
 	 * Second step: further refine the weight as a function of the
@@ -3189,6 +3212,8 @@ static void bfq_update_rate_reset(struct bfq_data *bfqd, struct request *rq)
 	 * maximum weight.
 	 */
 	divisor = 10 - weight;
+	if(open_bfqq_printk)
+            printk("4:%s %d %s %d weight:%d divisor:%d\n",__func__,__LINE__,current->comm,current->pid,weight,divisor);
 
 	/*
 	 * Finally, update peak rate:
@@ -3210,7 +3235,7 @@ static void bfq_update_rate_reset(struct bfq_data *bfqd, struct request *rq)
 	 */
 	bfqd->peak_rate = max_t(u32, 1, bfqd->peak_rate);
         if(open_bfqq_printk)
-	    printk("%s %d %s %d bfqd->peak_rate:%d\n",__func__,__LINE__,current->comm,current->pid,bfqd->peak_rate);
+	    printk("5:%s %d %s %d bfqd->peak_rate:%d\n",__func__,__LINE__,current->comm,current->pid,bfqd->peak_rate);
 	update_thr_responsiveness_params(bfqd);
 
 reset_computation:
@@ -3560,7 +3585,7 @@ static bool __bfq_bfqq_expire(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 	 */
 	if (bfq_bfqq_coop(bfqq) && BFQQ_SEEKY(bfqq)){
 		if(open_bfqq_printk)
-			  printk("1:%s %d %s %d bfqq:0x%llx if (bfq_bfqq_coop(bfqq) && BFQQ_SEEKY(bfqq)){\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
+			  printk("1:%s %d %s %d bfqq:%llx if (bfq_bfqq_coop(bfqq) && BFQQ_SEEKY(bfqq)){\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
 		bfq_mark_bfqq_split_coop(bfqq);
 	}
 
@@ -3590,13 +3615,13 @@ static bool __bfq_bfqq_expire(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 			bfqq->budget_timeout = jiffies;
                 
 		if(open_bfqq_printk)
-	            printk("2:%s %d %s %d bfqq:0x%llx bfqq->dispatched:%d ->bfq_del_bfqq_busy()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->dispatched);
+	            printk("2:%s %d %s %d bfqq:%llx bfqq->dispatched:%d ->bfq_del_bfqq_busy()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->dispatched);
 
 		bfq_del_bfqq_busy(bfqd, bfqq, true);
 	} else {
 		
 		if(open_bfqq_printk)
-	            printk("3:%s %d %s %d bfqq:0x%llx ->bfq_requeue_bfqq()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
+	            printk("3:%s %d %s %d bfqq:%llx ->bfq_requeue_bfqq()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
 		bfq_requeue_bfqq(bfqd, bfqq, true);
 		/*
 		 * Resort priority tree of potential close cooperators.
@@ -3646,7 +3671,7 @@ static void __bfq_bfqq_recalc_budget(struct bfq_data *bfqd,
 		budget = 2 * min_budget;
 
        if(open_bfqq_printk)
-	   printk("1:%s %d %s %d bfqq:%llx min_budget:%d bfqq->wr_coeff:%d bfq_bfqq_sync(bfqq):%d bfqq->max_budget:%d budget:%d reason:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,min_budget,bfqq->wr_coeff,bfq_bfqq_sync(bfqq),bfqq->max_budget,budget,reason);
+	   printk("1:%s %d %s %d bfqq:%llx min_budget:%d bfqq->wr_coeff:%d bfq_bfqq_sync(bfqq):%d bfqq->max_budget:%d bfqd->bfq_max_budget:%d  budget:%d reason:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,min_budget,bfqq->wr_coeff,bfq_bfqq_sync(bfqq),bfqq->max_budget,bfqd->bfq_max_budget,budget,reason);
 
 	bfq_log_bfqq(bfqd, bfqq, "recalc_budg: last budg %d, budg left %d",
 		bfqq->entity.budget, bfq_bfqq_budget_left(bfqq));

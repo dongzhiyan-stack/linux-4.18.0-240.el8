@@ -122,7 +122,7 @@ static bool bfq_update_next_in_service(struct bfq_sched_data *sd,
 
 			change_without_lookup =
 				(new_entity_class_idx ==
-				 bfq_class_idx(next_in_service)//二者同一个调度策略
+				 bfq_class_idx(next_in_service)//next_in_service和new_entity 二者同一个调度策略
 				 &&
 				 !bfq_gt(new_entity->start, st->vtime)//new_entity->start 小于 st->vtime
 				 &&
@@ -464,8 +464,8 @@ static void bfq_update_active_node(struct rb_node *node)
  * changed in the path to the root.  The only nodes that may have changed
  * are the ones in the path or their siblings.
  */
-//从entity的node所在节点，一直在红黑树向上得到它的parent节点，更新这些红黑树节点对应的bfq_entity的成员min_start，同时也更新
-//这些node在红黑树的左右子节点对应的entity的min_start。这个更新操作一直到根节点才结束
+//从entity的node所在节点，一直在红黑树向上得到它的parent节点，更新这些红黑树节点对应的entity的成员min_start，同时也更新
+//这些node在红黑树的左右子节点对应的entity的min_start，这个更新操作一直到根节点才结束。
 static void bfq_update_active_tree(struct rb_node *node)
 {
 	struct rb_node *parent;
@@ -622,7 +622,9 @@ static void bfq_active_extract(struct bfq_service_tree *st,
     //把entiry从st active tree剔除
 	bfq_extract(&st->active, entity);
 
-    //从entity的node所在节点，一直在红黑树向上得到它的parent节点，更新这些红黑树节点对应的bfq_entity的成员min_start，同时也更新
+    /*node此时是红黑树entity节点下最下方的那个节点，下边的bfq_update_active_tree()是更新node到根节点之间所有节点及其子节点
+      对应的entity的min_start*/
+    //从node所在节点，一直在红黑树向上得到它的parent节点，更新这些红黑树节点对应的bfq_entity的成员min_start，同时也更新
     //这些node在红黑树的左右子节点对应的entity的min_start。这个更新操作一直到根节点才结束
 	if (node)
 		bfq_update_active_tree(node);
@@ -732,7 +734,7 @@ static void bfq_forget_idle(struct bfq_service_tree *st)
 {
 	struct bfq_entity *first_idle = st->first_idle;
 	struct bfq_entity *last_idle = st->last_idle;
-
+    //st->active红黑树空并且last_idle->finish小于st->vtime则if成立，
 	if (RB_EMPTY_ROOT(&st->active) && last_idle &&
 	    !bfq_gt(last_idle->finish, st->vtime)) {
 		/*
@@ -966,8 +968,7 @@ static void bfq_update_fin_time_enqueue(struct bfq_entity *entity,
 	 * parameter set (see the comments on the function).
 	 */
 	st = __bfq_entity_update_weight_prio(st, entity, true);
-    //根据entity->budget/entity->weight计算entity已经消耗的虚拟运行时间，entity->start加上这段虚拟运行时间得到entity->finish
-    //这里是按照entity的总配额计算的虚拟运行时间
+    //这里简化成entity->finish=entity->start+entity->budget/entity->weight，用entity的配额得到entity->finish，注意是entity的配额
 	bfq_calc_finish(entity, entity->budget);
 
 	/*
@@ -1038,11 +1039,12 @@ static void __bfq_activate_entity(struct bfq_entity *entity,
 	unsigned long long min_vstart;
 
 	/* See comments on bfq_fqq_update_budg_for_activation */
-    //if和else分支测试都有成立，新分配的bfqq及entity时是走else分支
-	if (non_blocking_wait_rq && bfq_gt(st->vtime, entity->finish)) {
+    //如果bfqq被设置了non_blocking_wait_rq标记，并且 st->vtime大于 entity->finish，则 min_vstart 设置为 entity->finish。
+	//为什么这样做？这样可以保证下边把bfqq的entity插入st->active tree时，更靠近st->active tree左边，这样更容易被调度到。
+	if (non_blocking_wait_rq && bfq_gt(st->vtime, entity->finish)) {//处于st->idle tree的走这里
 		backshifted = true;
 		min_vstart = entity->finish;
-	} else
+	} else//新分配的bfqq走这里
 		min_vstart = st->vtime;
 
     //entity现在处于st->idle tree
@@ -1281,7 +1283,7 @@ bool __bfq_deactivate_entity(struct bfq_entity *entity, bool ins_into_idle_tree)
     //entity是sd正在使用的entity则is_in_service为true
 	is_in_service = entity == sd->in_service_entity;
     
-    //service是entity已经消耗的配额，除以weight得到entity已经消耗的虚拟运行时间，再加上entity->start得到entity->finish
+    //service是entity已经消耗的配额，除以entity权重weight得到entity已经消耗的虚拟运行时间，再加上entity->start得到entity->finish
 	bfq_calc_finish(entity, entity->service);
 
 	if (is_in_service)//把sd->in_service_entity指向的entity从红黑树剔除时，要把sd->in_service_entity清NULL
@@ -1806,7 +1808,7 @@ void bfq_del_bfqq_busy(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 	bfq_log_bfqq(bfqd, bfqq, "del from busy");
     //清理bfqq busy状态
 	bfq_clear_bfqq_busy(bfqq);
-
+    //每从st->active红黑树剔除一个bfqq，bfqq对应调度算法的bfqd->busy_queues[]成员见1
 	bfqd->busy_queues[bfqq->ioprio_class - 1]--;
 
 	if (bfqq->wr_coeff > 1)

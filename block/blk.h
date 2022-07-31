@@ -282,6 +282,7 @@ int create_task_io_context(struct task_struct *task, gfp_t gfp_mask, int node);
  * Note that this function can't be called with IRQ disabled because
  * task_lock which protects %current->io_context is IRQ-unsafe.
  */
+//·ÖÅäioc²¢¸³ÓÚtask->io_context
 static inline struct io_context *create_io_context(gfp_t gfp_mask, int node)
 {
 	WARN_ON_ONCE(irqs_disabled());

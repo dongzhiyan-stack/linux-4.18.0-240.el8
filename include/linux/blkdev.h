@@ -186,10 +186,12 @@ struct request {
 	 */
 	union {
 		struct {
-            //新的req插入时，bfq_init_rq()中icq_to_bic(rq->elv.icq)由icq得到struct bfq_io_cq *bic
+            //新的req插入时，bfq_init_rq()中icq_to_bic(rq->elv.icq)由icq得到struct bfq_io_cq *bic。blk_mq_sched_assign_ioc()中赋值
 			struct io_cq		*icq;
+            //rq->elv.priv[1]保存新分配的bfqq，rq->elv.priv[0]保存bic，bic来自req->elv->icq指针所在的bfq_io_cq
             //bfq_init_rq()新的req插入时，先查找rq->elv.priv[1]中是否有bfqq，有的话直接从取出返回，否则才会分配新的bfqq
-			void			*priv[2];//bfq_init_rq()中rq->elv.priv[0] = bic;rq->elv.priv[1] = bfqq;
+            //bfq_init_rq()中rq->elv.priv[0] = bic;rq->elv.priv[1] = bfqq; __bfq_insert_request()中rq->elv.priv[1] = new_bfqq
+			void			*priv[2];
 		} elv;
 
 		struct {
@@ -237,7 +239,7 @@ struct request {
 
 	union {
 		struct __call_single_data csd;
-		u64 fifo_time;
+		u64 fifo_time;//__bfq_insert_request()把req插入IO队列时赋值req fifo超时时间
 	};
 
 	/*
@@ -662,7 +664,7 @@ bool blk_queue_flag_test_and_set(unsigned int flag, struct request_queue *q);
 	test_bit(QUEUE_FLAG_NOXMERGES, &(q)->queue_flags)
 #define blk_queue_unpriv_sgio(q) \
 	test_bit(QUEUE_FLAG_UNPRIV_SGIO, &(q)->queue_flags)
-#define blk_queue_nonrot(q)	test_bit(QUEUE_FLAG_NONROT, &(q)->queue_flags)
+#define blk_queue_nonrot(q)	test_bit(QUEUE_FLAG_NONROT, &(q)->queue_flags)//磁盘时ssd
 #define blk_queue_io_stat(q)	test_bit(QUEUE_FLAG_IO_STAT, &(q)->queue_flags)
 #define blk_queue_add_random(q)	test_bit(QUEUE_FLAG_ADD_RANDOM, &(q)->queue_flags)
 #define blk_queue_discard(q)	test_bit(QUEUE_FLAG_DISCARD, &(q)->queue_flags)

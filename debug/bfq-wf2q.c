@@ -1508,7 +1508,7 @@ static struct bfq_entity *bfq_first_active_entity(struct bfq_service_tree *st,
 		entry = rb_entry(node, struct bfq_entity, rb_node);
 left:
 		if(open_bfqq_printk)
-			    printk("1:%s %d %s %d entry:%llx entry->start:%lld vtime:%lld pid:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)entry,entry->start,vtime,bfq_entity_to_bfqq(entry)->pid);
+			    printk("1:%s %d %s %d entry:%llx entry->start:%lld entry->finish:%lld st->vtime:%lld  vtime:%lld pid:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)entry,entry->start,entry->finish,st->vtime,vtime,bfq_entity_to_bfqq(entry)->pid);
 		if (!bfq_gt(entry->start, vtime))
 			first = entry;
 
@@ -1516,7 +1516,7 @@ left:
 			entry = rb_entry(node->rb_left,
 					 struct bfq_entity, rb_node);
 		        if(open_bfqq_printk)
-			    printk("2:%s %d %s %d entry:%llx entry->min_start:%lld vtime:%lld pid:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)entry,entry->min_start,vtime,bfq_entity_to_bfqq(entry)->pid);
+			    printk("2:%s %d %s %d entry:%llx entry->min_start:%lld entry->start:%lld entry->finish:%lld vtime:%lld pid:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)entry,entry->min_start,entry->start,entry->finish,vtime,bfq_entity_to_bfqq(entry)->pid);
 			if (!bfq_gt(entry->min_start, vtime)) {
 				node = node->rb_left;
 				goto left;

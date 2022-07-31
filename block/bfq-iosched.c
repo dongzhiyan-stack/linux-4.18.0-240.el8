@@ -229,7 +229,7 @@ static const unsigned long bfq_merge_time_limit = HZ/10;
 static struct kmem_cache *bfq_pool;
 
 /* Below this threshold (in ns), we consider thinktime immediate. */
-#define BFQ_MIN_TT		(2 * NSEC_PER_MSEC)
+#define BFQ_MIN_TT		(2 * NSEC_PER_MSEC)// 2ms
 
 /* hw_tag detection: parallel requests threshold and min samples needed. */
 #define BFQ_HW_QUEUE_THRESHOLD	3
@@ -237,11 +237,14 @@ static struct kmem_cache *bfq_pool;
 
 #define BFQQ_SEEK_THR		(sector_t)(8 * 100)
 #define BFQQ_SECT_THR_NONROT	(sector_t)(2 * 32)
+//返回true情况a 1:last_pos和rq的起始扇区相差的扇区数大于8  2:存储设备是SATA或者rq要传输的扇区数小于64
+//返回false情况a 1:last_pos和rq的起始扇区相差的扇区数小于8 
+//返回false情况b 1:last_pos和rq的起始扇区相差的扇区数大于8 2:存储设备是ssd并且rq要传输的扇区数大于64
 #define BFQ_RQ_SEEKY(bfqd, last_pos, rq) \
-	(get_sdist(last_pos, rq) >			\
+	(get_sdist(last_pos, rq) >			\//last_pos和rq的起始扇区相差的扇区数大于8
 	 BFQQ_SEEK_THR &&				\
-	 (!blk_queue_nonrot(bfqd->queue) ||		\
-	  blk_rq_sectors(rq) < BFQQ_SECT_THR_NONROT))
+	 (!blk_queue_nonrot(bfqd->queue) ||		\//存储设备是SATA
+	  blk_rq_sectors(rq) < BFQQ_SECT_THR_NONROT))//rq要传输的扇区数小于64
 #define BFQQ_CLOSE_THR		(sector_t)(8 * 1024)
 #define BFQQ_SEEKY(bfqq)	(hweight32(bfqq->seek_history) > 19)
 /*
@@ -2927,7 +2930,7 @@ static void bfq_set_budget_timeout(struct bfq_data *bfqd,
 		timeout_coeff = bfqq->entity.weight / bfqq->entity.orig_weight;
 
 	bfqd->last_budget_start = ktime_get();
-
+    //设置bfqq超时时间
 	bfqq->budget_timeout = jiffies +
 		bfqd->bfq_timeout * timeout_coeff;
 }
@@ -3003,7 +3006,7 @@ static void bfq_arm_slice_timer(struct bfq_data *bfqd)
 {
 	struct bfq_queue *bfqq = bfqd->in_service_queue;
 	u32 sl;
-
+    //标记bfqq_wait_request
 	bfq_mark_bfqq_wait_request(bfqq);
 
 	/*
@@ -3024,13 +3027,13 @@ static void bfq_arm_slice_timer(struct bfq_data *bfqd)
 	 */
 	if (BFQQ_SEEKY(bfqq) && bfqq->wr_coeff == 1 &&
 	    !bfq_asymmetric_scenario(bfqd, bfqq))
-		sl = min_t(u64, sl, BFQ_MIN_TT);
+		sl = min_t(u64, sl, BFQ_MIN_TT);//2ms
 	else if (bfqq->wr_coeff > 1)
-		sl = max_t(u32, sl, 20ULL * NSEC_PER_MSEC);
+		sl = max_t(u32, sl, 20ULL * NSEC_PER_MSEC);// 400ms
 
 	bfqd->last_idling_start = ktime_get();
 	bfqd->last_idling_start_jiffies = jiffies;
-
+    //启动idle timer定时器，定时器函数是bfq_idle_slice_timer()
 	hrtimer_start(&bfqd->idle_slice_timer, ns_to_ktime(sl),
 		      HRTIMER_MODE_REL);
 	bfqg_stats_set_start_idle_time(bfqq_group(bfqq));
@@ -3056,13 +3059,14 @@ static unsigned long bfq_calc_max_budget(struct bfq_data *bfqd)
  */
 static void update_thr_responsiveness_params(struct bfq_data *bfqd)
 {
-	if (bfqd->bfq_user_max_budget == 0) {
+	if (bfqd->bfq_user_max_budget == 0) {//bfqd->bfq_user_max_budget默认是0
+	    //用bfqd->peak_rate计算bfqd->bfq_max_budget，应该是bfqd->peak_rate越大则bfqd->bfq_max_budget越大
 		bfqd->bfq_max_budget =
 			bfq_calc_max_budget(bfqd);
 		bfq_log(bfqd, "new max_budget = %d", bfqd->bfq_max_budget);
 	}
 }
-
+//bfqd->last_dispatch、bfqd->peak_rate_samples、bfqd->sequential_samples、bfqd->tot_sectors_dispatched重置
 static void bfq_reset_rate_computation(struct bfq_data *bfqd,
 				       struct request *rq)
 {
@@ -3080,7 +3084,7 @@ static void bfq_reset_rate_computation(struct bfq_data *bfqd,
 		bfqd->peak_rate_samples, bfqd->sequential_samples,
 		bfqd->tot_sectors_dispatched);
 }
-//该函数经过复杂的计算最终得到bfqd->peak_rate
+//根据bfqd->delta_from_first这段时间派发的IO请求的情况重新计算bfqd->peak_rate
 static void bfq_update_rate_reset(struct bfq_data *bfqd, struct request *rq)
 {
 	u32 rate, weight, divisor;
@@ -3093,8 +3097,9 @@ static void bfq_update_rate_reset(struct bfq_data *bfqd, struct request *rq)
 	 * not compute new rate. Just reset parameters, to get ready
 	 * for a new evaluation attempt.
 	 */
-	if (bfqd->peak_rate_samples < BFQ_RATE_MIN_SAMPLES ||
-	    bfqd->delta_from_first < BFQ_RATE_MIN_INTERVAL)
+	//这段时间派发的IO请求数不能低于BFQ_RATE_MIN_SAMPLES，并且这段时间不能小于BFQ_RATE_MIN_INTERVAL。否则不重新计算bfqd->peak_rate
+	if (bfqd->peak_rate_samples < BFQ_RATE_MIN_SAMPLES ||//BFQ_RATE_MIN_SAMPLES:32
+	    bfqd->delta_from_first < BFQ_RATE_MIN_INTERVAL)//300ms
 		goto reset_computation;
 
 	/*
@@ -3111,7 +3116,7 @@ static void bfq_update_rate_reset(struct bfq_data *bfqd, struct request *rq)
 	 * Rate computed in sects/usec, and not sects/nsec, for
 	 * precision issues.
 	 */
-	//rate=传输req的字节数/这段传输时间bfqd->delta_from_first，这是计算bfqd->delta_from_first时间内的传输速率
+	//rate=传输req的字节数/这段传输时间bfqd->delta_from_first，这是计算bfqd->delta_from_first这段时间传输IO请求的速率
 	rate = div64_ul(bfqd->tot_sectors_dispatched<<BFQ_RATE_SHIFT,
 			div_u64(bfqd->delta_from_first, NSEC_PER_USEC));
 
@@ -3121,6 +3126,8 @@ static void bfq_update_rate_reset(struct bfq_data *bfqd, struct request *rq)
 	 *   total, and rate is below the current estimated peak rate
 	 * - rate is unreasonably high (> 20M sectors/sec)
 	 */
+	//1:bfqd->sequential_samples是连续派发的IO请求次数，如果小于 bfqd->peak_rate_samples的3/4，并且新计算的IO请求传输
+	//速率rate小于bfqd->peak_rate。   2:新计算的IO请求传输rate大于20Msectors/s。这两个条件有一个成立都不会重新计算bfqd->peak_rate
 	if ((bfqd->sequential_samples < (3 * bfqd->peak_rate_samples)>>2 &&
 	     rate <= bfqd->peak_rate) ||
 		rate > 20<<BFQ_RATE_SHIFT)
@@ -3149,12 +3156,14 @@ static void bfq_update_rate_reset(struct bfq_data *bfqd, struct request *rq)
 	 * turn, holds true because bfqd->sequential_samples is not
 	 * incremented for the first sample.
 	 */
+	//bfqd->sequential_samples肯定小于bfqd->peak_rate_samples，计算出的weight在0~8
 	weight = (9 * bfqd->sequential_samples) / bfqd->peak_rate_samples;
 
 	/*
 	 * Second step: further refine the weight as a function of the
 	 * duration of the observation interval.
 	 */
+	//根据本次派发IO请求的时间bfqd->delta_from_first，重新计算weight
 	weight = min_t(u32, 8,
 		       div_u64(weight * bfqd->delta_from_first,
 			       BFQ_RATE_REF_INTERVAL));
@@ -3163,6 +3172,7 @@ static void bfq_update_rate_reset(struct bfq_data *bfqd, struct request *rq)
 	 * Divisor ranging from 10, for minimum weight, to 2, for
 	 * maximum weight.
 	 */
+	//divisor在10~2
 	divisor = 10 - weight;
 
 	/*
@@ -3170,6 +3180,8 @@ static void bfq_update_rate_reset(struct bfq_data *bfqd, struct request *rq)
 	 *
 	 * peak_rate = peak_rate * (divisor-1) / divisor  +  rate / divisor
 	 */
+	//bfqd->peak_rate的更新很复杂。但是有个规律，如果本次派发IO请求的时间bfqd->delta_from_first内，派发IO请求越多，数据量越大
+	//则rate越高，divisor越小，peak_rate应该就越大，因为peak_rate是派发IO请求峰值时的速率
 	bfqd->peak_rate *= divisor-1;
 	bfqd->peak_rate /= divisor;
 	rate /= divisor; /* smoothing constant alpha = 1/divisor */
@@ -3183,11 +3195,13 @@ static void bfq_update_rate_reset(struct bfq_data *bfqd, struct request *rq)
 	 * divisions by zero where bfqd->peak_rate is used as a
 	 * divisor.
 	 */
+	//bfqd->peak_rate最小值必须是1
 	bfqd->peak_rate = max_t(u32, 1, bfqd->peak_rate);
-
+    //用bfqd->peak_rate计算bfqd->bfq_max_budget，应该是bfqd->peak_rate越大则bfqd->bfq_max_budget越大
 	update_thr_responsiveness_params(bfqd);
 
 reset_computation:
+    //bfqd->last_dispatch、bfqd->peak_rate_samples、bfqd->sequential_samples、bfqd->tot_sectors_dispatched重置
 	bfq_reset_rate_computation(bfqd, rq);
 }
 
@@ -3223,6 +3237,7 @@ reset_computation:
  * of the observed dispatch rate. The function assumes to be invoked
  * on every request dispatch.
  */
+//__bfq_dispatch_request->bfq_dispatch_rq_from_bfqq->bfq_dispatch_remove()->bfq_update_peak_rate()派发IO请求才会执行到该函数
 //核心是计算得到bfqd->peak_rate，bfq_calc_max_budget()中根据bfqd->peak_rate计算bfqd->bfq_max_budget
 static void bfq_update_peak_rate(struct bfq_data *bfqd, struct request *rq)
 {
@@ -3247,14 +3262,19 @@ static void bfq_update_peak_rate(struct bfq_data *bfqd, struct request *rq)
 	 * - compute rate, if possible, for that observation interval
 	 * - start a new observation interval with this dispatch
 	 */
+	//bfqd->last_dispatch是上次派发IO请求的时间，now_ns是本次的，如果相差时间大于100ms，并且派发的req全都传输完，
+	//直接goto update_rate_and_reset分支重置peak_rate
 	if (now_ns - bfqd->last_dispatch > 100*NSEC_PER_MSEC &&
 	    bfqd->rq_in_driver == 0)
 		goto update_rate_and_reset;
 
 	/* Update sampling information */
-    //好像每派发一个req则bfqd->peak_rate_samples加1
+    //每派发一个req则bfqd->peak_rate_samples加1
 	bfqd->peak_rate_samples++;
 
+    //1:如果还有IO请求每传输完成或者前后两个派发IO请求的时间间隔小于BFQ_MIN_TT，2:前后两次派发的IO请求扇区地址接近等等
+    //则if成立而令bfqd->sequential_samples加1。bfqd->sequential_samples与bfqd->peak_rate_samples意思接近，但是
+    //bfqd->sequential_samples在连续快速派发IO请求时才会加1，否则不加
 	if ((bfqd->rq_in_driver > 0 ||
 		now_ns - bfqd->last_completion < BFQ_MIN_TT)
 	    && !BFQ_RQ_SEEKY(bfqd, bfqd->last_position, rq))
@@ -3280,7 +3300,7 @@ static void bfq_update_peak_rate(struct bfq_data *bfqd, struct request *rq)
 		goto update_last_values;
 
 update_rate_and_reset:
-    //该函数经过负责的计算最终得到bfqd->peak_rate
+    //根据本段时间派发的IO请求的情况重新计算bfqd->peak_rate
 	bfq_update_rate_reset(bfqd, rq);
 update_last_values:
 
@@ -3289,7 +3309,7 @@ update_last_values:
 	if (RQ_BFQQ(rq) == bfqd->in_service_queue)
 		bfqd->in_serv_last_pos = bfqd->last_position;
 
-    //要派发req的时间
+    //记录本次要派发req是的时间
 	bfqd->last_dispatch = now_ns;
 }
 
@@ -4092,6 +4112,9 @@ void bfq_bfqq_expire(struct bfq_data *bfqd,
 		return;
 
 	/* mark bfqq as waiting a request only if a bic still points to it */
+    //如果bfqq的entity配额没消耗光而只是没有要派发的IO请求而导致bfqq失效，则会把bfqq的entity从st->active tree剔除，清除bfqq
+    //的busy状态，则bfq_bfqq_busy(bfqq)返回false，reason是BFQQE_NO_MORE_REQUESTS。则该if成立，执行
+    //bfq_mark_bfqq_non_blocking_wait_rq()设置bfqq的bfqq_non_blocking_wait_rq状态
 	if (!bfq_bfqq_busy(bfqq) &&//成立
 	    reason != BFQQE_BUDGET_TIMEOUT &&
 	    reason != BFQQE_BUDGET_EXHAUSTED) {
@@ -4102,7 +4125,7 @@ void bfq_bfqq_expire(struct bfq_data *bfqd,
 		 * service with this same budget (as if it never expired)
 		 */
 	} else
-		entity->service = 0;
+		entity->service = 0;//走这个分支才会把entity消耗的配额entity->service清0
 
 	/*
 	 * Reset the received-service counter for every parent entity.
@@ -4132,8 +4155,9 @@ void bfq_bfqq_expire(struct bfq_data *bfqd,
  * just checked on request arrivals and completions, as well as on
  * idle timer expirations.
  */
+//bfqq超时时间到返回true
 static bool bfq_bfqq_budget_timeout(struct bfq_queue *bfqq)
-{   //bfqq超时时间到了返回true
+{   //bfqq->budget_timeout <= jiffies 返回true，说明超时时间到了
 	return time_is_before_eq_jiffies(bfqq->budget_timeout);
 }
 
@@ -4145,6 +4169,7 @@ static bool bfq_bfqq_budget_timeout(struct bfq_queue *bfqq)
  * condition does not hold, or if the queue is slow enough to deserve
  * only to be kicked off for preserving a high throughput.
  */
+//bfqq超时时间到了返回true
 static bool bfq_may_expire_for_budg_timeout(struct bfq_queue *bfqq)
 {
 	bfq_log_bfqq(bfqq->bfqd, bfqq,
@@ -4153,10 +4178,10 @@ static bool bfq_may_expire_for_budg_timeout(struct bfq_queue *bfqq)
 			bfq_bfqq_budget_left(bfqq) >=  bfqq->entity.budget / 3,
 		bfq_bfqq_budget_timeout(bfqq));
 
-	return (!bfq_bfqq_wait_request(bfqq) ||
-		bfq_bfqq_budget_left(bfqq) >=  bfqq->entity.budget / 3)
+	return (!bfq_bfqq_wait_request(bfqq) ||//bfqq没有启动 idle timer
+		bfq_bfqq_budget_left(bfqq) >=  bfqq->entity.budget / 3)//bfqq配额消耗了三分之一
 		&&
-		bfq_bfqq_budget_timeout(bfqq);
+		bfq_bfqq_budget_timeout(bfqq);//bfqq->budget_timeout 超时时间到
 }
 
 static bool idling_boosts_thr_without_issues(struct bfq_data *bfqd,
@@ -5462,6 +5487,7 @@ static void bfq_update_has_short_ttime(struct bfq_data *bfqd,
  * Called when a new fs request (rq) is added to bfqq.  Check if there's
  * something we should do about it.
  */
+//__bfq_insert_request()->bfq_rq_enqueued() 插入IO执行到这里
 static void bfq_rq_enqueued(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 			    struct request *rq)
 {
@@ -5469,11 +5495,15 @@ static void bfq_rq_enqueued(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 		bfqq->meta_pending++;
     //赋值req扇区结束地址
 	bfqq->last_request_pos = blk_rq_pos(rq) + blk_rq_sectors(rq);
-
+    
+    //bfq_bfqq_wait_request()成立说明bfqq原本的IO请求已经传输完成了，但是bfqq没有立即失效，而是等待bfqq的进程是否
+    //很快又会有新的IO请求要派发，bfqq保持bfqd->in_service_queue保持不变。现在正是向bfqq添加新的IO请求，因为bfqq设置
+    //了bfqq_wait_request标记，则有很大概率立即派发这个IO请求，这就是bfq调度算法提高IO性能的wait_request特性
 	if (bfqq == bfqd->in_service_queue && bfq_bfqq_wait_request(bfqq)) {//这个if实测没成立
-		bool small_req = bfqq->queued[rq_is_sync(rq)] == 1 &&
+        //rq传输的扇区数小于32
+        bool small_req = bfqq->queued[rq_is_sync(rq)] == 1 &&//bfqq只有rq这一个同步IO或者异步IO请求
 				 blk_rq_sectors(rq) < 32;
-        //bfqq->budget_timeout
+        //bfqq超时时间到返回true
 		bool budget_timeout = bfq_bfqq_budget_timeout(bfqq);
 
 		/*
@@ -5492,6 +5522,8 @@ static void bfq_rq_enqueued(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 		 * merged to this one quickly, then the device will be
 		 * unplugged and larger requests will be dispatched.
 		 */
+		//如果要传输的IO请求数据量小于32个扇区并且bfqq没有过期超时等等，则直接return。这样避免bfq_clear_bfqq_wait_request
+		//清理bfqq_wait_request标记和bfqq失效，而保证够立即派发这个IO请求，因为它的bfqq是bfqd->in_service_queue。
 		if (small_req && idling_boosts_thr_without_issues(bfqd, bfqq) &&
 		    !budget_timeout)
 			return;
@@ -5503,6 +5535,7 @@ static void bfq_rq_enqueued(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 		 * cases disk idling is to be stopped, so clear
 		 * wait_request flag and reset timer.
 		 */
+		//到这里才会清理bfqq_wait_request标记并取消idle_slice_timer
 		bfq_clear_bfqq_wait_request(bfqq);
 		hrtimer_try_to_cancel(&bfqd->idle_slice_timer);
 
@@ -5513,6 +5546,7 @@ static void bfq_rq_enqueued(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 		 * timestamps of the queue are not updated correctly.
 		 * See [1] for more details.
 		 */
+		//budget_timeout为true说明bfqq传输IO请求时间已经很长则令bfqq超时过期失效
 		if (budget_timeout)
 			bfq_bfqq_expire(bfqd, bfqq, false,
 					BFQQE_BUDGET_TIMEOUT);
@@ -5727,11 +5761,12 @@ static void bfq_completed_request(struct bfq_queue *bfqq, struct bfq_data *bfqd)
 	u32 delta_us;
 
 	bfq_update_hw_tag(bfqd);
-    //已经派发但是还没传输完成的req个数
+    //已经派发但是还没传输完成的reqIO请求个数
 	bfqd->rq_in_driver--;
-    //派发完成的req个数
+    //还没有传输完成的IO请求个数，为0表示所有的IO请求都传输完成了，跟bfqd->rq_in_driver类似
 	bfqq->dispatched--;
 
+    //如果bfqq没有要派发的IO请求了，并且bfqq不在st->active tree
 	if (!bfqq->dispatched && !bfq_bfqq_busy(bfqq)) {
 		/*
 		 * Set budget_timeout (which we overload to store the
@@ -5771,7 +5806,7 @@ static void bfq_completed_request(struct bfq_queue *bfqq, struct bfq_data *bfqd)
 	 *   re-initialization of the observation interval on next
 	 *   dispatch
 	 */
-	//如果每两次传输完成的req时间过长，但是这段时间的数据传输速率小于1M/s，则执行bfq_update_rate_reset()计算新的bfqd->peak_rate
+	//如果每两次传输完成的req时间过长，且这段时间的数据传输速率小于1M/s，则执行bfq_update_rate_reset()计算新的bfqd->peak_rate
 	if (delta_us > BFQ_MIN_TT/NSEC_PER_USEC &&
 	   (bfqd->last_rq_max_size<<BFQ_RATE_SHIFT)/delta_us <//bfqd->last_rq_max_size<<BFQ_RATE_SHIFT)/delta_us 是计算数据传输速率
 			1UL<<(BFQ_RATE_SHIFT - 10))
@@ -5803,10 +5838,20 @@ static void bfq_completed_request(struct bfq_queue *bfqq, struct bfq_data *bfqd)
 	 * If this is the in-service queue, check if it needs to be expired,
 	 * or if we want to idle in case it has no pending requests.
 	 */
+	//bfqq是当前传输完成的req的bfqq，它是bfq当前正在使用bfqq(即bfqd->in_service_queue)时才成立
 	if (bfqd->in_service_queue == bfqq) {
 		if (bfq_bfqq_must_idle(bfqq)) {
+            //bfqq->dispatched为0表示本次派发完成的IO请求是bfqq最后一个，就是说bfqq目前派发的IO请求都传输完成了。但是bfqq
+            //后续短时间内可能还会派发IO请求，于是执行执行bfq_arm_slice_timer()标记bfqq_wait_request。然后启动
+            //idle timer定时器函数，等定时时间到，执行定时函数bfq_idle_slice_timer():这个bfqq没有要派发的IO请求，
+            //才会令bfqq过期失效。为什么要这样操作?因为正常情况，当bfqq最后一个IO请求派发后，执行到bfq_completed_request()里，
+            //是执行下边的bfq_bfqq_expire()令bfqq过期失效。这样如果bfqq过了短暂的时间，bfqq又有新的IO请求来了，bfqq还得激活，
+            //还得被bfq调度到，才能派发这个IO请求，这就会造成延迟。现在是令bfqq本没有要派发的IO请求了而延迟过期失效，如果
+            //短时间内就来了新的IO请求，就能立即调度派发，挺巧妙。另外提一点，在派发IO请求执行到bfq_select_queue()函数，
+            //如果bfqq被设置了bfqq_wait_request标记，说明它启动了ilde timer延迟失效，但现在新的IO请求派发，于是就
+            //bfq_clear_bfqq_wait_request()清理bfqq_wait_request标记，并hrtimer_try_to_cancel()取消idle timer定时器。
 			if (bfqq->dispatched == 0)
-				bfq_arm_slice_timer(bfqd);
+				bfq_arm_slice_timer(bfqd);//里边执行bfq_mark_bfqq_wait_request()
 			/*
 			 * If we get here, we do not expire bfqq, even
 			 * if bfqq was in budget timeout or had no
@@ -6021,6 +6066,7 @@ static void bfq_update_inject_limit(struct bfq_data *bfqd,
  */
 static void bfq_finish_requeue_request(struct request *rq)
 {
+    //由传输完成的IO请求rq得到bfqq
 	struct bfq_queue *bfqq = RQ_BFQQ(rq);
 	struct bfq_data *bfqd;
 
@@ -6059,7 +6105,7 @@ static void bfq_finish_requeue_request(struct request *rq)
 
 		if (rq == bfqd->waited_rq)
 			bfq_update_inject_limit(bfqd, bfqq);
-
+        //IO传输完成重点执行的函数在这里
 		bfq_completed_request(bfqq, bfqd);
 		bfq_finish_requeue_request_body(bfqq);
 
@@ -6263,7 +6309,7 @@ static struct bfq_queue *bfq_init_rq(struct request *rq)
 	 * events, a request cannot be manipulated any longer before
 	 * being removed from bfq.
 	 */
-	//新的req插入时，先查找rq->elv.priv[1]中是否有bfqq，有的话直接从取出返回，rq->elv.priv[1]本身保存的是req所属的bfqq
+	//新的req插入时，先查找rq->elv.priv[1]中是否有bfqq，有的话直接返回，rq->elv.priv[1]本身保存的是req所属的bfqq
 	if (rq->elv.priv[1])
 		return rq->elv.priv[1];//找到bfqq直接return，否则下边分配新的bfqq
     //由rq->elv.icq得到bic
@@ -6374,7 +6420,7 @@ bfq_idle_slice_timer_body(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 	}
 
 	bfq_clear_bfqq_wait_request(bfqq);
-
+    //bfqq超时时间到，则令bfqq因BFQQE_BUDGET_TIMEOUT而过期失效
 	if (bfq_bfqq_budget_timeout(bfqq))
 		/*
 		 * Also here the queue can be safely expired
@@ -6382,6 +6428,7 @@ bfq_idle_slice_timer_body(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 		 * guarantees
 		 */
 		reason = BFQQE_BUDGET_TIMEOUT;
+    //bfqq没有要发的IO请求了，则令bfqq因BFQQE_TOO_IDLE而过期失效
 	else if (bfqq->queued[0] == 0 && bfqq->queued[1] == 0)
 		/*
 		 * The queue may not be empty upon timer expiration,
@@ -6390,9 +6437,10 @@ bfq_idle_slice_timer_body(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 		 * during disk idling.
 		 */
 		reason = BFQQE_TOO_IDLE;
-	else
+	else//否则，跳到schedule_dispatch分支继续派发bfqq上的IO请求
 		goto schedule_dispatch;
 
+    //令bfqq因BFQQE_BUDGET_TIMEOUT或BFQQE_TOO_IDLE而过期失效
 	bfq_bfqq_expire(bfqd, bfqq, true, reason);
 
 schedule_dispatch:
@@ -6927,7 +6975,7 @@ static struct elevator_type iosched_bfq_mq = {
 	.ops = {
 		.limit_depth		= bfq_limit_depth,
 		.prepare_request	= bfq_prepare_request,
-		.requeue_request        = bfq_finish_requeue_request,
+		.requeue_request        = bfq_finish_requeue_request,//io传输完成时的回调函数
 		.finish_request		= bfq_finish_requeue_request,
 		.exit_icq		= bfq_exit_icq,
 		.insert_requests	= bfq_insert_requests,//插入req

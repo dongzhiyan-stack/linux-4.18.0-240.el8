@@ -70,9 +70,10 @@ enum {
  *   locks.  Due to the lock ordering, q exit is simple but ioc exit
  *   requires reverse-order double lock dance.
  */
+//ioc_create_icq()中分配
 struct io_cq {
 	struct request_queue	*q;
-	struct io_context	*ioc;
+	struct io_context	*ioc;//ioc_create_icq()中赋值
 
 	/*
 	 * q_node and ioc_node link io_cq through icq_list of q and ioc
@@ -112,8 +113,8 @@ struct io_context {
 	int nr_batch_requests;     /* Number of requests left in the batch */
 	unsigned long last_waited; /* Time last woken after wait for request */
 
-	struct radix_tree_root	icq_tree;
-	struct io_cq __rcu	*icq_hint;
+	struct radix_tree_root	icq_tree;//ioc_lookup_icq()中有解释
+	struct io_cq __rcu	*icq_hint;//ioc_lookup_icq()中赋值
 	struct hlist_head	icq_list;
 
 	struct work_struct release_work;

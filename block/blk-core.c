@@ -881,7 +881,7 @@ out:
 	rcu_read_unlock();
 	return ret;
 }
-
+//这里分配ioc并赋于task->io_context
 static noinline_for_stack bool
 generic_make_request_checks(struct bio *bio)
 {
@@ -976,6 +976,7 @@ generic_make_request_checks(struct bio *bio)
 	 * memory.  Just allocate it upfront.  This may fail and block
 	 * layer knows how to live with it.
 	 */
+    //分配ioc并赋于task->io_context
 	create_io_context(GFP_ATOMIC, q->node);
 
 	if (!blkcg_bio_issue_check(q, bio))
@@ -1033,7 +1034,7 @@ blk_qc_t generic_make_request(struct bio *bio)
 	 */
 	struct bio_list bio_list_on_stack[2];
 	blk_qc_t ret = BLK_QC_T_NONE;
-
+    //这里分配ioc并赋于task->io_context
 	if (!generic_make_request_checks(bio))
 		goto out;
 

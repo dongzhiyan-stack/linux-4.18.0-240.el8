@@ -25,10 +25,10 @@
  * is only served when no one else is using the disk.
  */
 enum {
-	IOPRIO_CLASS_NONE,
-	IOPRIO_CLASS_RT,
-	IOPRIO_CLASS_BE,
-	IOPRIO_CLASS_IDLE,
+	IOPRIO_CLASS_NONE,//无优先级
+	IOPRIO_CLASS_RT,//实时优先级
+	IOPRIO_CLASS_BE,//默认，没RT优先级高
+	IOPRIO_CLASS_IDLE,//idle优先级
 };
 
 /*

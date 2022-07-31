@@ -169,6 +169,7 @@ extern void (*raid6_datap_recov)(int disks, size_t bytes, int faila,
 void raid6_dual_recov(int disks, size_t bytes, int faila, int failb,
 		      void **ptrs);
 
+#define jiffies	raid6_jiffies()
 /* Some definitions to allow code to be compiled for testing in userspace */
 #ifndef __KERNEL__
 

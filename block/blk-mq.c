@@ -336,6 +336,7 @@ static struct request *blk_mq_rq_ctx_init(struct blk_mq_alloc_data *data,
 		rq->elv.icq = NULL;
 		if (e && e->type->ops.prepare_request) {
 			if (e->type->icq_cache)
+                //这里取出current->io_context
 				blk_mq_sched_assign_ioc(rq);
 
 			e->type->ops.prepare_request(rq, data->bio);
@@ -1984,7 +1985,7 @@ static blk_qc_t blk_mq_make_request(struct request_queue *q, struct bio *bio)
 
 	data.cmd_flags = bio->bi_opf;
 	blk_queue_enter_live(q);
-	rq = __blk_mq_alloc_request(&data);
+	rq = __blk_mq_alloc_request(&data);//分配req
 	if (unlikely(!rq)) {
 		blk_queue_exit(q);
 		rq_qos_cleanup(q, bio);
