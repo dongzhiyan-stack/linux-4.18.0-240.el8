@@ -166,6 +166,7 @@ static inline u64 get_jiffies_64(void)
 #define time_is_before_eq_jiffies64(a) time_after_eq64(get_jiffies_64(), a)
 
 /* time_is_after_eq_jiffies(a) return true if a is after or equal to jiffies*/
+//a>=jiffies ·µ»Øtrue
 #define time_is_after_eq_jiffies(a) time_before_eq(jiffies, a)
 #define time_is_after_eq_jiffies64(a) time_before_eq64(get_jiffies_64(), a)
 

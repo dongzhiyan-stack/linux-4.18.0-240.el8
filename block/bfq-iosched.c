@@ -180,7 +180,7 @@ static const int bfq_back_max = 16 * 1024;
 static const int bfq_back_penalty = 2;
 
 /* Idling period duration, in ns. */
-static u64 bfq_slice_idle = NSEC_PER_SEC / 125;
+static u64 bfq_slice_idle = NSEC_PER_SEC / 125;//8ms
 
 /* Minimum number of assigned budgets for which stats are safe to compute. */
 static const int bfq_stats_min_budgets = 194;
@@ -237,16 +237,27 @@ static struct kmem_cache *bfq_pool;
 
 #define BFQQ_SEEK_THR		(sector_t)(8 * 100)
 #define BFQQ_SECT_THR_NONROT	(sector_t)(2 * 32)
-//返回true情况a 1:last_pos和rq的起始扇区相差的扇区数大于8  2:存储设备是SATA或者rq要传输的扇区数小于64
-//返回false情况a 1:last_pos和rq的起始扇区相差的扇区数小于8 
-//返回false情况b 1:last_pos和rq的起始扇区相差的扇区数大于8 2:存储设备是ssd并且rq要传输的扇区数大于64
-#define BFQ_RQ_SEEKY(bfqd, last_pos, rq) \
-	(get_sdist(last_pos, rq) >			\//last_pos和rq的起始扇区相差的扇区数大于8
-	 BFQQ_SEEK_THR &&				\
-	 (!blk_queue_nonrot(bfqd->queue) ||		\//存储设备是SATA
-	  blk_rq_sectors(rq) < BFQQ_SECT_THR_NONROT))//rq要传输的扇区数小于64
+/*last_pos是bfqq前一次派发的IO请求的结束地址，rq是本次bfqq派发的IO请求
+返回true情况a last_pos和rq的起始扇区相差的扇区数大于800  并且 存储设备是SATA或者rq要传输的扇区数小于64
+简单说，返回true有两种情况  1:ssd时前后两次派发的IO请求前后扇区地址相差大于800个扇区并且本次派发的IO请求扇区数小于64
+                            2:sata时前后两次派发的IO请求前后扇区地址相差大于800个扇区
+什么情况下判定rq seeky呢?对于SATA来说，主要前后两次派发的IO请求前后扇区地址相差大于800扇区则本次的rq就是seeky rq，就是随机IO。
+对于ssd来说，前后两次派发的IO请求前后扇区地址相差大于800个扇区并且本次传输的IO请求的扇区数太少则本次的rq就是seeky rq，
+就是传输的数据量少了
+
+//返回false情况a 1:last_pos和rq的起始扇区相差的扇区数小于800 
+//返回false情况b 1:last_pos和rq的起始扇区相差的扇区数大于800 2:存储设备是ssd并且rq要传输的扇区数大于64
+
+get_sdist(last_pos, rq) > BFQQ_SEEK_THR : last_pos和rq的起始扇区相差的扇区数大于8
+!blk_queue_nonrot(bfqd->queue) : 存储设备是SATA
+blk_rq_sectors(rq) < BFQQ_SECT_THR_NONROT) : rq要传输的扇区数小于64
+*/
+#define BFQ_RQ_SEEKY(bfqd, last_pos, rq) (get_sdist(last_pos, rq) > BFQQ_SEEK_THR &&   \
+               (!blk_queue_nonrot(bfqd->queue) ||blk_rq_sectors(rq) < BFQQ_SECT_THR_NONROT))
+
 #define BFQQ_CLOSE_THR		(sector_t)(8 * 1024)
-#define BFQQ_SEEKY(bfqq)	(hweight32(bfqq->seek_history) > 19)
+//bfqq的seeky属性表示随机IO，BFQQ_SEEKY返回true说明说明bfqq派发的随机IO很多
+#define BFQQ_SEEKY(bfqq)	(hweight32(bfqq->seek_history) > 19)//计算bfqq->seek_history有多少个bit位是1
 /*
  * Sync random I/O is likely to be confused with soft real-time I/O,
  * because it is characterized by limited throughput and apparently
@@ -254,6 +265,7 @@ static struct kmem_cache *bfq_pool;
  * containing only random (seeky) I/O are prevented from being tagged
  * as soft real-time.
  */
+//seek bfqq应该是说它派发的IO是随机的
 #define BFQQ_TOTALLY_SEEKY(bfqq)	(bfqq->seek_history & -1)
 
 /* Min number of samples required to perform peak-rate update */
@@ -1031,6 +1043,7 @@ static unsigned int bfq_wr_duration(struct bfq_data *bfqd)
 }
 
 /* switch back from soft real-time to interactive weight raising */
+//bfqq回到权重提升状态，增大bfqq->wr_coeff到30，更新bfqq->wr_cur_max_time到权重提升时间
 static void switch_back_to_interactive_wr(struct bfq_queue *bfqq,
 					  struct bfq_data *bfqd)
 {
@@ -1487,6 +1500,8 @@ static bool bfq_bfqq_update_budg_for_activation(struct bfq_data *bfqd,
 	 * would be expired immediately after being selected for
 	 * service. This would only cause useless overhead.
 	 */
+	//bfq有bfqq_non_blocking_wait_rq标记，说明之前bfqq配额足够但是没有要派发的IO请求而失效。但是在arrived_in_time时间内
+	//该bfqq又来了新的IO请求，于是这里if成立返回true，这样该bfqq有较大概率抢占bfqd->in_service_queue而快速派发新来的IO请求
 	if (bfq_bfqq_non_blocking_wait_rq(bfqq) && arrived_in_time &&
 	    bfq_bfqq_budget_left(bfqq) > 0) {
 		/*
@@ -1506,6 +1521,7 @@ static bool bfq_bfqq_update_budg_for_activation(struct bfq_data *bfqd,
 		 * entity->budget the remaining budget on such an
 		 * expiration.
 		 */
+		//entity->budget赋值entity剩余的配额
 		entity->budget = min_t(unsigned long,
 				       bfq_bfqq_budget_left(bfqq),
 				       bfqq->max_budget);
@@ -1519,6 +1535,7 @@ static bool bfq_bfqq_update_budg_for_activation(struct bfq_data *bfqd,
 		 * the service it has received during its previous
 		 * service slot(s).
 		 */
+		//entity->service清0
 		entity->service = 0;
 
 		return true;
@@ -1528,8 +1545,10 @@ static bool bfq_bfqq_update_budg_for_activation(struct bfq_data *bfqd,
 	 * We can finally complete expiration, by setting service to 0.
 	 */
 	entity->service = 0;
+    //显然这是增大bfqq的权重
 	entity->budget = max_t(unsigned long, bfqq->max_budget,
 			       bfq_serv_to_charge(bfqq->next_rq, bfqq));
+    //清理bfq的bfqq_non_blocking_wait_rq标记
 	bfq_clear_bfqq_non_blocking_wait_rq(bfqq);
 	return false;
 }
@@ -1538,26 +1557,60 @@ static bool bfq_bfqq_update_budg_for_activation(struct bfq_data *bfqd,
  * Return the farthest past time instant according to jiffies
  * macros.
  */
+//jiffies减去系统时间最大值，返回一个很大的负数
 static unsigned long bfq_smallest_from_now(void)
 {
 	return jiffies - MAX_JIFFY_OFFSET;
 }
 
+/*
+1:该函数的执行流程是:bfq_add_request()->bfq_bfqq_handle_idle_busy_switch()->bfq_update_bfqq_wr_on_rq_arrival(),
+该函数的执行时机是bfqq是新创建的 或者 bfqq原本是idle状态(bfqq的entity处于处于st->idle tree)。现在bfqq来了新的IO请求而要激活
+bfqq，首先在bfq_bfqq_handle_idle_busy_switch()根据bfqq的idle时间、bfqq的bfq_bfqq_in_large_burst属性等等，判定判断bfqq的IO
+特性，是burst型IO(in_burst是1)? 实时性IO(soft_rt是1)? 交互式IO(interactive是1)?然后执行bfq_update_bfqq_wr_on_rq_arrival()
+根据bfqq的IO特性，更新bfqq->wr_coeff、bfqq->wr_cur_max_time、bfqq->last_wr_start_finish。
+
+2:bfqq->wr_coeff是bfqq的权重提升倍数，回到bfq_bfqq_handle_idle_busy_switch()函数，执行bfq_add_bfqq_busy->bfq_activate_bfqq->bfq_activate_requeue_entity->
+__bfq_activate_requeue_entity->__bfq_activate_entity->bfq_update_fin_time_enqueue->__bfq_entity_update_weight_prio()，在
+__bfq_entity_update_weight_prio()中令bfqq的原始权重乘以bfqq->wr_coeff，就是放大bfqq的权重。
+
+3:bfqq->wr_cur_max_time是进程的权重提升时间。派发IO请求时bfq_dispatch_rq_from_bfqq->bfq_update_wr_data，
+如果进程权重提升时间到了，则可能要执行bfq_bfqq_end_wr()就要令bfqq结束提升权重。
+
+需要特别说明几点
+1:bfq_update_bfqq_wr_on_rq_arrival()的执行时机一般都是bfqq原本处于idle状态(处于st->active tree)，bfqq有了新的IO请求，激活bfqq
+(把bfqq移入到st->active tree)。bfqq激活后，再向进程的bfqq添加IO请求，此时并不会不会执行到bfq_update_bfqq_wr_on_rq_arrival()，
+除非bfqq再次过期失效，处于idle状态，被移入st->ilde tree。
+
+2:bfqq->wr_start_at_switch_to_srt的更新时机，是bfq_update_bfqq_wr_on_rq_arrival()里因bfqq先被判定交互式IO，
+if (interactive)成立则bfqq->wr_cur_max_time = bfq_wr_duration(bfqd)和bfqq->wr_coeff=30。然后bfqq被判定是实时性IO，下边的
+if (bfqq->wr_cur_max_time != bfqd->bfq_wr_rt_max_time)成立，则更新bfqq->wr_start_at_switch_to_srt = bfqq->last_wr_start_finish=
+*/
 static void bfq_update_bfqq_wr_on_rq_arrival(struct bfq_data *bfqd,
 					     struct bfq_queue *bfqq,
-					     unsigned int old_wr_coeff,
-					     bool wr_or_deserves_wr,
-					     bool interactive,
-					     bool in_burst,
-					     bool soft_rt)
+					     unsigned int old_wr_coeff,//bfqq老的的wr_coeff值，该函数里会更新它
+					     bool wr_or_deserves_wr,//wr_or_deserves_wr为true表示bfqq的bfqq->wr_coeff大于1，或者bfqq是交互式或者实时同步IO
+					     bool interactive,//interactive为true表示进程是交互式IO
+					     bool in_burst,//in_burst为true表示进程是普通的大量传输IO
+					     bool soft_rt)//soft_rt为true表示进程是实时性IO
 {
+//old_wr_coeff:1 wr_or_deserves_wr:1 interactive:1 in_burst:0 soft_rt:0
+//old_wr_coeff:1 wr_or_deserves_wr:0 interactive:1 in_burst:0 soft_rt:0
+//old_wr_coeff:1 wr_or_deserves_wr:0 interactive:0 in_burst:0 soft_rt:0
+
+    //old_wr_coeff == 1 : bfqq老的wr_coeff是1，没有权重提升
+    //bfqq正在提升权重，或者bfqq是同步IO并且想要提升权重(因为bfqq是交互式IO或者实时性IO)，则wr_or_deserves_wr是1
 	if (old_wr_coeff == 1 && wr_or_deserves_wr) {
 		/* start a weight-raising period */
-		if (interactive) {
+        //走这个分支说明bfqq是交互式IO
+		if (interactive) {//测试这里成立
 			bfqq->service_from_wr = 0;
+            //权重提升倍数bfqq->wr_coeff更新为30,之后__bfq_entity_update_weight_prio()中根据bfqq->wr_coeff增加bfqq的权重
 			bfqq->wr_coeff = bfqd->bfq_wr_coeff;
+            //更新bfqq的权重提升时间bfqq->wr_cur_max_time为bfq_wr_duration()
 			bfqq->wr_cur_max_time = bfq_wr_duration(bfqd);
 		} else {
+		//走这个分支说明bfqq是实时IO
 			/*
 			 * No interactive weight raising in progress
 			 * here: assign minus infinity to
@@ -1569,10 +1622,13 @@ static void bfq_update_bfqq_wr_on_rq_arrival(struct bfq_data *bfqd,
 			 * progress (and thus actually started by
 			 * mistake).
 			 */
+			//bfqq->wr_start_at_switch_to_srt赋值负无穷大
 			bfqq->wr_start_at_switch_to_srt =
 				bfq_smallest_from_now();
+            //bfqq->wr_coeff更新 30*BFQ_SOFTRT_WEIGHT_FACTOR，显然实时IO的bfqq权重提升倍数更大
 			bfqq->wr_coeff = bfqd->bfq_wr_coeff *
 				BFQ_SOFTRT_WEIGHT_FACTOR;
+            //更新bfqq->wr_cur_max_time为实时性IO最大的权重提升时间bfqd->bfq_wr_rt_max_time
 			bfqq->wr_cur_max_time =
 				bfqd->bfq_wr_rt_max_time;
 		}
@@ -1589,13 +1645,16 @@ static void bfq_update_bfqq_wr_on_rq_arrival(struct bfq_data *bfqd,
 		bfqq->entity.budget = min_t(unsigned long,
 					    bfqq->entity.budget,
 					    2 * bfq_min_budget(bfqd));
-	} else if (old_wr_coeff > 1) {
+	}
+    else if (old_wr_coeff > 1)//走这个分支说明bfqq老的权重提升倍数bfqq->wr_coeff大于1
+    {
+        //走这个分支说明bfqq是交互式IO，再次更新bfqq->wr_coeff和bfqq->wr_cur_max_time
 		if (interactive) { /* update wr coeff and duration */
 			bfqq->wr_coeff = bfqd->bfq_wr_coeff;
 			bfqq->wr_cur_max_time = bfq_wr_duration(bfqd);
-		} else if (in_burst)
+		} else if (in_burst)//走这个分支说明bfqq是普通的大量传输IO,则还原权重提升倍数bfqq->wr_coeff为1
 			bfqq->wr_coeff = 1;
-		else if (soft_rt) {
+		else if (soft_rt) {//走这个分支说明bfqq是实时性IO
 			/*
 			 * The application is now or still meeting the
 			 * requirements for being deemed soft rt.  We
@@ -1625,16 +1684,26 @@ static void bfq_update_bfqq_wr_on_rq_arrival(struct bfq_data *bfqd,
 			 *    latency because the application is not
 			 *    weight-raised while they are pending.
 			 */
-			if (bfqq->wr_cur_max_time !=
-				bfqd->bfq_wr_rt_max_time) {
-				bfqq->wr_start_at_switch_to_srt =
-					bfqq->last_wr_start_finish;
-
-				bfqq->wr_cur_max_time =
-					bfqd->bfq_wr_rt_max_time;
-				bfqq->wr_coeff = bfqd->bfq_wr_coeff *
-					BFQ_SOFTRT_WEIGHT_FACTOR;
+			//如果bfqq->wr_cur_max_time不是实时性IO的最大的权重提升时间bfqd->bfq_wr_rt_max_time。这个if什么情况下成立呢?
+			//我的分析是，bfqq原本处于idle状态(处于st->ilde tree)，然后bfqq的进程来的新的IO请求，执行bfq_add_request()->
+			//bfq_bfqq_handle_idle_busy_switch()->bfq_update_bfqq_wr_on_rq_arrival()里，判断bfqq是交互式IO，
+			//if (interactive)成立，则bfqq->wr_coeff=30和bfqq->wr_cur_max_time = bfq_wr_duration(bfqd)。然后bfqq派发IO请求，
+			//过期失效，再次处于idle状态。接着bfqq的进程又来的新的IO请求，还是执行执行bfq_add_request()->
+			//bfq_bfqq_handle_idle_busy_switch()->bfq_update_bfqq_wr_on_rq_arrival()，但是bfqq绑定的进程被判定是实时性IO，
+			//下边的if (bfqq->wr_cur_max_time != bfqd->bfq_wr_rt_max_time)成立，则再次增大bfqq->wr_coeff和bfqq->wr_cur_max_time
+			if (bfqq->wr_cur_max_time != bfqd->bfq_wr_rt_max_time) 
+            {
+				//bfqq->wr_start_at_switch_to_srt更新为bfqq上次权重提升时间
+				bfqq->wr_start_at_switch_to_srt = bfqq->last_wr_start_finish;
+                //bfqq->wr_cur_max_time更新为实时性IO最大的权重提升时间
+				bfqq->wr_cur_max_time = bfqd->bfq_wr_rt_max_time;
+                //bfqq->wr_coeff更新 30*BFQ_SOFTRT_WEIGHT_FACTOR
+				bfqq->wr_coeff = bfqd->bfq_wr_coeff * BFQ_SOFTRT_WEIGHT_FACTOR;
 			}
+            
+            /*显然，如果进程bfqq是实时性IO并且bfqq->wr_coeff在执行bfq_add_request()->bfq_bfqq_handle_idle_busy_switch()->
+             bfq_update_bfqq_wr_on_rq_arrival()函数时bfqq->wr_coeff已经大于1，则更新bfqq->last_wr_start_finish=jiffies。就
+             是说，实时性IO的进程bfqq权重提升后，每次执行到bfq_update_bfqq_wr_on_rq_arrival()都更新bfqq->last_wr_start_finish*/
 			bfqq->last_wr_start_finish = jiffies;
 		}
 	}
@@ -1643,8 +1712,13 @@ static void bfq_update_bfqq_wr_on_rq_arrival(struct bfq_data *bfqd,
 static bool bfq_bfqq_idle_for_long_time(struct bfq_data *bfqd,
 					struct bfq_queue *bfqq)
 {
+    //bfqq派发的IO请求数全传输完成，并且bfqq处于st->idle tree已经很长时间则返回true
+    
+    //bfqq->budget_timeout在bfqq最后一个IO请求完成finish函数被赋值jiffies，此时bfqq已经过期失效处于st->idle tree。然后过了
+    //大于等于bfqd->bfq_wr_min_idle_time时间，即bfqq->budget_timeout+ bfqd->bfq_wr_min_idle_time < jiffies，bfqq绑定的进程
+    //要传输新的IO请求而把bfqq激活要添加到st->active tree，这就是说bfqq已经idle很长时间了。
 	return bfqq->dispatched == 0 &&
-		time_is_before_jiffies(
+		time_is_before_jiffies(//bfqq->budget_timeout+ bfqd->bfq_wr_min_idle_time < jiffies返回true
 			bfqq->budget_timeout +
 			bfqd->bfq_wr_min_idle_time);
 }
@@ -1654,17 +1728,18 @@ static bool bfq_bfqq_idle_for_long_time(struct bfq_data *bfqd,
  * Return true if bfqq is in a higher priority class, or has a higher
  * weight than the in-service queue.
  */
+//bfqq的优先级比in_serv_bfqq高或者权重高则返回true
 static bool bfq_bfqq_higher_class_or_weight(struct bfq_queue *bfqq,
 					    struct bfq_queue *in_serv_bfqq)
 {
 	int bfqq_weight, in_serv_weight;
 
-	if (bfqq->ioprio_class < in_serv_bfqq->ioprio_class)
+	if (bfqq->ioprio_class < in_serv_bfqq->ioprio_class)//bfqq优先级更高
 		return true;
 
 	if (in_serv_bfqq->entity.parent == bfqq->entity.parent) {
-		bfqq_weight = bfqq->entity.weight;
-		in_serv_weight = in_serv_bfqq->entity.weight;
+		bfqq_weight = bfqq->entity.weight;//bfqq的权重
+		in_serv_weight = in_serv_bfqq->entity.weight;//in_serv_bfqq的权重
 	} else {
 		if (bfqq->entity.parent)
 			bfqq_weight = bfqq->entity.parent->weight;
@@ -1675,10 +1750,10 @@ static bool bfq_bfqq_higher_class_or_weight(struct bfq_queue *bfqq,
 		else
 			in_serv_weight = in_serv_bfqq->entity.weight;
 	}
-
+    //bfqq的权重更高
 	return bfqq_weight > in_serv_weight;
 }
-//重点操作是把bfqq插入到st->active红黑树
+//判断bfqq的IO特性，是burst型IO、实时性IO、交互式IO?提升bfqq的权重参数bfqq->wr_coeff等，然后把bfqq插入到st->active红黑树等等
 static void bfq_bfqq_handle_idle_busy_switch(struct bfq_data *bfqd,
 					     struct bfq_queue *bfqq,
 					     int old_wr_coeff,
@@ -1687,12 +1762,20 @@ static void bfq_bfqq_handle_idle_busy_switch(struct bfq_data *bfqd,
 {
 	bool soft_rt, in_burst,	wr_or_deserves_wr,
 		bfqq_wants_to_preempt,
+		//bfqq处于st->idle tree已经很长时间
 		idle_for_long_time = bfq_bfqq_idle_for_long_time(bfqd, bfqq),
 		/*
 		 * See the comments on
 		 * bfq_bfqq_update_budg_for_activation for
 		 * details on the usage of the next variable.
 		 */
+		/*bfqq->ttime.last_end_request是bfqq最后一个req传输完成的时间，arrived_in_time是true。
+		  说明bfqq最后一个req传输完成后(此时bfqq已经过期)，在bfqd->bfq_slice_idle * 3这段空闲时间内，bfqq绑定的进程
+		  再次派发IO请求而执行该函数激活bfqq。为了是bfqq绑定的进程IO延迟低，就要用bfqq抢占bfqd->in_service_queue，从而尽可能快的
+		  派发bfqq绑定的进程新的IO请求。arrived_in_time此时是true，下边执行bfq_bfqq_update_budg_for_activation()用到它，
+		  如果bfqq再有bfq_bfqq_non_blocking_wait_rq标记，则该函数返回true，说明bfqq有很大可能抢占bfqd->in_service_queue
+		  而尽可能快被调度使用作为新的bfqd->in_service_queue，这样就可以尽可能块派发bfqq新的IO请求*/
+		//bfqq在传输完最后一个IO请求后的bfqd->bfq_slice_idle * 3时间内又来新的IO请求则arrived_in_time为true
 		arrived_in_time =  ktime_get_ns() <=
 			bfqq->ttime.last_end_request +
 			bfqd->bfq_slice_idle * 3;
@@ -1705,22 +1788,33 @@ static void bfq_bfqq_handle_idle_busy_switch(struct bfq_data *bfqd,
 	 * - it has been idle for enough time or is soft real-time,
 	 * - is linked to a bfq_io_cq (it is not shared in any sense).
 	 */
+	//bfqq有bfq_bfqq_in_large_burst标记则in_burst为true,in_burst表示bfqq绑定的进程有一段时间内大量派发IO请求的特性
 	in_burst = bfq_bfqq_in_large_burst(bfqq);
+
+    //soft_rt为true表示bfqq绑定的进程是实时性IO.soft_rt大部分情况都是0，测试时只有一次是1
 	soft_rt = bfqd->bfq_wr_max_softrt_rate > 0 &&
 		!BFQQ_TOTALLY_SEEKY(bfqq) &&
 		!in_burst &&
 		time_is_before_jiffies(bfqq->soft_rt_next_start) &&
 		bfqq->dispatched == 0;
+    
+    //bfqq没有bfq_bfqq_in_large_burst属性，并且bfqq处于st->idle tree很长时间则interactive是1，这表示bfqq绑定的进程是交互式IO，
+    //这种进程一次性派发的IO不多，但是要求低延迟。下边执行bfq_update_bfqq_wr_on_rq_arrival()令bfqq->wr_coeff=30，将来提升bfqq
+    //的权重30倍
 	*interactive = !in_burst && idle_for_long_time;
+
+    //bfqq正在提升权重，或者bfqq是同步IO并且想要提升权重(因为bfqq是交互式IO或者实时性IO)，则wr_or_deserves_wr是1
 	wr_or_deserves_wr = bfqd->low_latency &&
 		(bfqq->wr_coeff > 1 ||
-		 (bfq_bfqq_sync(bfqq) &&
-		  bfqq->bic && (*interactive || soft_rt)));
+		 (bfq_bfqq_sync(bfqq) && bfqq->bic && (*interactive || soft_rt)));
 
 	/*
 	 * Using the last flag, update budget and check whether bfqq
 	 * may want to preempt the in-service queue.
 	 */
+    //如果bfqq有bfqq_non_blocking_wait_rq标记，说明之前bfqq配额足够但是没有要派发的IO请求而失效。但是在arrived_in_time时间内
+    //该bfqq又来了新的IO请求，于是该函数成立返回true，这样该bfqq有较大概率抢占bfqd->in_service_queue而尽可能快被调度使用
+    //作为新的bfqd->in_service_queue，这样就可以尽可能块派发bfqq新的IO请求
 	bfqq_wants_to_preempt =
 		bfq_bfqq_update_budg_for_activation(bfqd, bfqq,
 						    arrived_in_time);
@@ -1738,23 +1832,31 @@ static void bfq_bfqq_handle_idle_busy_switch(struct bfq_data *bfqd,
 	 * more does not invalidate the fact that bfqq was created in
 	 * a burst.
 	 */
-	if (likely(!bfq_bfqq_just_created(bfqq)) &&
-	    idle_for_long_time &&
-	    time_is_before_jiffies(
+	//如果bfqq不是新创建的(就是说是处于st->ilde tree)，并且bfqq空闲很长时间idle_for_long_time，并且在bfqq最后一个IO请求
+	//传输完成的时间点bfqq->budget_timeout后，过了10s+ bfqq才来了新的IO请求而激活它，于是清理bfqq_in_large_burst标记。
+	/*bfq_bfqq_in_large_burst 我的理解是，表示一段bfqq一段时间内大量派发IO请求，如果它派发IO后空闲了很长一段时间，那就说明
+      bfqq不再具有bfqq_in_large_burst属性了，该清理掉*/
+	if (likely(!bfq_bfqq_just_created(bfqq)) &&//bfqq不是新创建的(就是说是处于st->ilde tree)
+	    idle_for_long_time &&//bfqq空闲很长时间
+	    time_is_before_jiffies(//bfqq->budget_timeout + 10s < jiffies，就是说 bfqq->budget_timeout后已经过了10s+
 		    bfqq->budget_timeout +
 		    msecs_to_jiffies(10000))) {
+		//从bfqq->burst_list_node链表剔除
 		hlist_del_init(&bfqq->burst_list_node);
 		bfq_clear_bfqq_in_large_burst(bfqq);
 	}
 
 	bfq_clear_bfqq_just_created(bfqq);
 
-
+    //如果bfqq被清理了bfq_bfqq_IO_bound属性
 	if (!bfq_bfqq_IO_bound(bfqq)) {
+        //bfqq在派发完最后一个IO请求后(被移动到st->idle tree)的bfqd->bfq_slice_idle * 3时间内又来新的IO请求
+        //则arrived_in_time为true，这样bfqq->requests_within_timer就加1。如果这样连续持续120次，bfqq->requests_within_timer
+        //大于120，那就再对bfqq设置bfq_bfqq_IO_bound属性
 		if (arrived_in_time) {
 			bfqq->requests_within_timer++;
 			if (bfqq->requests_within_timer >=
-			    bfqd->bfq_requests_within_timer)
+			    bfqd->bfq_requests_within_timer)//bfqd->bfq_requests_within_timer默认120
 				bfq_mark_bfqq_IO_bound(bfqq);
 		} else
 			bfqq->requests_within_timer = 0;
@@ -1766,15 +1868,17 @@ static void bfq_bfqq_handle_idle_busy_switch(struct bfq_data *bfqd,
 			bfqq->split_time =
 				jiffies - bfqd->bfq_wr_min_idle_time - 1;
 
+        //一般情况bfqq->split_time负无穷大，这个if大部分情况都成立
 		if (time_is_before_jiffies(bfqq->split_time +
-					   bfqd->bfq_wr_min_idle_time)) {
+					   bfqd->bfq_wr_min_idle_time)) {//这里成立
+		    //根据进程是IO属性(burst IO、交互式IO、实时性IO)调整bfqq->wr_coeff，bfqq权重提升靠这个
 			bfq_update_bfqq_wr_on_rq_arrival(bfqd, bfqq,
 							 old_wr_coeff,
 							 wr_or_deserves_wr,
 							 *interactive,
 							 in_burst,
 							 soft_rt);
-
+            //如果bfqq->wr_coeff变化了，于是把bfqq->entity.prio_changed置1
 			if (old_wr_coeff != bfqq->wr_coeff)
 				bfqq->entity.prio_changed = 1;
 		}
@@ -1819,11 +1923,13 @@ static void bfq_bfqq_handle_idle_busy_switch(struct bfq_data *bfqd,
 	 * updated, and this operation is quite costly (see the
 	 * comments on bfq_bfqq_update_budg_for_activation()).
 	 */
+	//如果bfqq达到抢占bfqd->in_service_queue的条件，则令bfqd->in_service_queue因BFQQE_PREEMPTED而过期失效。但是并不能保证立即
+	//调度bfqq使用，bfqq只是前边执行bfq_add_bfqq_busy()加入了st->active tree而已!
 	if (bfqd->in_service_queue &&
-	    ((bfqq_wants_to_preempt &&
-	      bfqq->wr_coeff >= bfqd->in_service_queue->wr_coeff) ||
+	    ((bfqq_wants_to_preempt &&//bfqq_wants_to_preempt抢占条件是1
+	      bfqq->wr_coeff >= bfqd->in_service_queue->wr_coeff) ||//bfqq->wr_coeff更大
 	     bfq_bfqq_higher_class_or_weight(bfqq, bfqd->in_service_queue)) &&
-	    next_queue_may_preempt(bfqd))
+	    next_queue_may_preempt(bfqd))//sd->next_in_service != sd->in_service_entity
 	    //因抢占导致的bfqq失效
 		bfq_bfqq_expire(bfqd, bfqd->in_service_queue,
 				false, BFQQE_PREEMPTED);
@@ -2101,6 +2207,7 @@ static void bfq_add_request(struct request *rq)
 	if (unlikely(!bfqd->nonrot_with_queueing && prev != bfqq->next_rq))
 		bfq_pos_tree_add_move(bfqd, bfqq);
 
+    //bfqq是新创建的或者bfqq在st->idle tree该if才成立
 	if (!bfq_bfqq_busy(bfqq)) /* switching to busy ... */ //激活bfqq，把bfqq添加到st->active tree
 		bfq_bfqq_handle_idle_busy_switch(bfqd, bfqq, old_wr_coeff,
 						 rq, &interactive);
@@ -2108,13 +2215,16 @@ static void bfq_add_request(struct request *rq)
 		if (bfqd->low_latency && old_wr_coeff == 1 && !rq_is_sync(rq) &&
 		    time_is_before_jiffies(
 				bfqq->last_wr_start_finish +
-				bfqd->bfq_wr_min_inter_arr_async)) {
+				bfqd->bfq_wr_min_inter_arr_async)) {//测试这里基本没成立过
+			//更新bfqq->wr_coeff
 			bfqq->wr_coeff = bfqd->bfq_wr_coeff;
 			bfqq->wr_cur_max_time = bfq_wr_duration(bfqd);
 
 			bfqd->wr_busy_queues++;
 			bfqq->entity.prio_changed = 1;
 		}
+
+        //bfqq->next_rq发生了变化，执行bfq_updated_next_req()根据新的bfqq->next_rq消耗的配额和bfqq->max_budget更新bfqq权重
 		if (prev != bfqq->next_rq)
 			bfq_updated_next_req(bfqd, bfqq);
 	}
@@ -2145,6 +2255,22 @@ static void bfq_add_request(struct request *rq)
 	 * this is already done in bfq_bfqq_handle_idle_busy_switch if
 	 * needed.
 	 */
+	//这个if很容易成立。bfqd->low_latency默认是1，其他只要bfqq老的 bfqq->wr_coeff是1 或者 新的bfqq->wr_coeff是1 或者 bfqq
+	//是交互式IO，这个if就会成立。除非是bfqq老的bfqq->wr_coeff大于1，并且bfqq是实时性IO(这样新的bfqq->wr_coeff不是1，
+	//并且interactive是0)，if才不会成立。
+	/*准确来说，以下几种情况该if成立
+      1:bfqq的bfqq->wr_coeff一直是1，那每次向bfqq插入一个IO请求就bfqq->last_wr_start_finish=jiffies，bfqq->last_wr_start_finish
+        此时记录的是每次向bfqq插入IO请求的时间点
+      2:bfqq的bfqq->wr_coeff是1，但是在上边的bfq_bfqq_handle_idle_busy_switch()->bfq_update_bfqq_wr_on_rq_arrival()里
+        ，把bfqq->wr_coeff增大到30或更大，此时在这里bfqq->last_wr_start_finish = jiffies记录的是bfqq权重提升开始时间
+      3:bfqq的权重已经提升了，bfqq->wr_coeff已经大于1，但是bfqq是交互式IO特性，interactive是1，此时也
+        bfqq->last_wr_start_finish = jiffies，此时记录的是每次向bfqq插入IO请求的时间点
+
+     另外，还有几处更新bfqq->last_wr_start_finish的地方
+     1:派发IO请求时，bfq_dispatch_rq_from_bfqq()->bfq_update_wr_data->bfq_bfqq_end_wr() 在bfqq权重提升结束时
+       bfqq->last_wr_start_finish = jiffies，此时bfqq->last_wr_start_finish记录的是权重更新结束时间
+     
+    */
 	if (bfqd->low_latency &&
 		(old_wr_coeff == 1 || bfqq->wr_coeff == 1 || interactive))
 		bfqq->last_wr_start_finish = jiffies;
@@ -2396,11 +2522,16 @@ static void bfq_requests_merged(struct request_queue *q, struct request *rq,
 }
 
 /* Must be called with bfqq != NULL */
-//更新bfqq->bfqd->wr_busy_queues、bfqq->wr_coeff、bfqq->wr_cur_max_time、bfqq->last_wr_start_finish、bfqq->entity.prio_changed
+//bfq_dispatch_rq_from_bfqq->bfq_update_wr_data-> bfq_bfqq_end_wr() 每次派发IO请求时都可能执行到
+
+//bfqq结束权重提升，bfqq->wr_coeff 和 bfqq->last_wr_start_finish恢复到权重提升前的状态等等
 static void bfq_bfqq_end_wr(struct bfq_queue *bfqq)
 {
+    //权重提升的bfqq个数减少一个
 	if (bfq_bfqq_busy(bfqq))
 		bfqq->bfqd->wr_busy_queues--;
+    
+    //bfqq->wr_coeff 和 bfqq->last_wr_start_finish恢复到权重提升前的状态
 	bfqq->wr_coeff = 1;
 	bfqq->wr_cur_max_time = 0;
 	bfqq->last_wr_start_finish = jiffies;
@@ -2408,6 +2539,7 @@ static void bfq_bfqq_end_wr(struct bfq_queue *bfqq)
 	 * Trigger a weight change on the next invocation of
 	 * __bfq_entity_update_weight_prio.
 	 */
+	//bfqq->entity.prio_changed置1表示bfqq的bfqq->wr_coeff变化了
 	bfqq->entity.prio_changed = 1;
 }
 
@@ -3272,7 +3404,7 @@ static void bfq_update_peak_rate(struct bfq_data *bfqd, struct request *rq)
     //每派发一个req则bfqd->peak_rate_samples加1
 	bfqd->peak_rate_samples++;
 
-    //1:如果还有IO请求每传输完成或者前后两个派发IO请求的时间间隔小于BFQ_MIN_TT，2:前后两次派发的IO请求扇区地址接近等等
+    //1:如果还有IO请求没传输完成或者前后两个派发IO请求的时间间隔小于BFQ_MIN_TT，2:前后两次派发的IO请求扇区地址接近等等
     //则if成立而令bfqd->sequential_samples加1。bfqd->sequential_samples与bfqd->peak_rate_samples意思接近，但是
     //bfqd->sequential_samples在连续快速派发IO请求时才会加1，否则不加
 	if ((bfqd->rq_in_driver > 0 ||
@@ -3304,7 +3436,7 @@ update_rate_and_reset:
 	bfq_update_rate_reset(bfqd, rq);
 update_last_values:
 
-    //要派发的req的结束扇区
+    //本次派发的req的结束扇区
 	bfqd->last_position = blk_rq_pos(rq) + blk_rq_sectors(rq);
 	if (RQ_BFQQ(rq) == bfqd->in_service_queue)
 		bfqd->in_serv_last_pos = bfqd->last_position;
@@ -3528,19 +3660,18 @@ static void bfq_dispatch_remove(struct request_queue *q, struct request *rq)
  * served. The last sub-condition commented above somewhat mitigates
  * this problem for weight-raised queues.
  */
+//当前的bfqq权重提升了并且正在磁盘驱动层传输的IO请求比较多等等则返回true
 static bool idling_needed_for_service_guarantees(struct bfq_data *bfqd,
 						 struct bfq_queue *bfqq)
 {
 	/* No point in idling for bfqq if it won't get requests any longer */
 	if (unlikely(!bfqq_process_refs(bfqq)))
 		return false;
-
+    //bfqq权重提升了并且  权重提升的bfqq数量比在st->active tree的bfqq的数量少(或者bfq在磁盘驱动传输的IO请求个数很多)
 	return (bfqq->wr_coeff > 1 &&
-		(bfqd->wr_busy_queues <
-		 bfq_tot_busy_queues(bfqd) ||
-		 bfqd->rq_in_driver >=
-		 bfqq->dispatched + 4)) ||
-		bfq_asymmetric_scenario(bfqd, bfqq);
+             (bfqd->wr_busy_queues < bfq_tot_busy_queues(bfqd) || bfqd->rq_in_driver >= bfqq->dispatched + 4)
+            ) ||
+		   bfq_asymmetric_scenario(bfqd, bfqq);//?????????????这个不知道啥用
 }
 /*bfqq的entity配额被消耗光了或者bfqq没有可派发的req了等等，bfqq的entity会从st->active红黑树踢掉。接着计算entity的虚拟
 运行时间并更新到entity->finish，把entity重新加入st->idle或st->active红黑树。如果bfqq不会再被调度，可能把entity及bfqq释放掉。*/
@@ -3828,12 +3959,14 @@ static bool bfq_bfqq_is_slow(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 		delta_ktime = bfqd->last_idling_start;
 	else
 		delta_ktime = ktime_get();
+    //最后一个选中的bfqd->in_service_queue的bfqq的时间到现在的时间差
 	delta_ktime = ktime_sub(delta_ktime, bfqd->last_budget_start);
 	delta_usecs = ktime_to_us(delta_ktime);
 
 	/* don't use too short time intervals */
+    //时间差小于10ms，则slow值是初值BFQQ_SEEKY(bfqq)
 	if (delta_usecs < 1000) {
-		if (blk_queue_nonrot(bfqd->queue))
+		if (blk_queue_nonrot(bfqd->queue))//ssd
 			 /*
 			  * give same worst-case guarantees as idling
 			  * for seeky
@@ -3851,6 +3984,7 @@ static bool bfq_bfqq_is_slow(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 	 * Use only long (> 20ms) intervals to filter out excessive
 	 * spikes in service rate estimation.
 	 */
+	//时间差大于20ms
 	if (delta_usecs > 20000) {
 		/*
 		 * Caveat for rotational devices: processes doing I/O
@@ -3862,6 +3996,7 @@ static bool bfq_bfqq_is_slow(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 		 * its rate has been lower than half of the estimated
 		 * peak rate.
 		 */
+		//bfqq->entity.service < bfqd->bfq_max_budget/2 说明bfqq配额消耗慢，于是slow就是1
 		slow = bfqq->entity.service < bfqd->bfq_max_budget / 2;
 	}
 
@@ -3967,9 +4102,7 @@ static unsigned long bfq_bfqq_softrt_next_start(struct bfq_data *bfqd,
 						struct bfq_queue *bfqq)
 {
 	return max3(bfqq->soft_rt_next_start,
-		    bfqq->last_idle_bklogged +
-		    HZ * bfqq->service_from_backlogged /
-		    bfqd->bfq_wr_max_softrt_rate,
+		    bfqq->last_idle_bklogged + HZ * bfqq->service_from_backlogged/bfqd->bfq_wr_max_softrt_rate,
 		    jiffies + nsecs_to_jiffies(bfqq->bfqd->bfq_slice_idle) + 4);
 }
 
@@ -4037,10 +4170,17 @@ void bfq_bfqq_expire(struct bfq_data *bfqd,
 	    //会执行bfq_bfqq_served()增加entity配额entity->service和调度器虚拟运行时间st->vtime
 		bfq_bfqq_charge_time(bfqd, bfqq, delta);
 
+    //如果bfqq超时原因是BFQQE_TOO_IDLE，并且bfqq只消化了很小一部分配额则令clear bfq_clear_bfqq_IO_bound。
+    /*bfqq创建时默认就有bfq_bfqq_IO_bound属性，如果bfqq的IO请求派发完了但是配额没消耗光，则bfq_completed_request()中
+      可能启动idle_slice_timer 定时器，并设置bfq_mark_bfqq_wait_request。等idle_slice_timer定时时间到，执行
+      bfq_idle_slice_timer_body()，bfqq依然没来新的IO请求，于是就令bfqq因BFQQE_TOO_IDLE而过期失效。执行到这里，bfqq消耗的
+      配额只有不到entity->budget的五分之一，于是清理bfqq的bfq_bfqq_IO_bound属性。因此，可以看出来，bfq_bfqq_IO_bound应该
+      表示bfqq表示短时间大量传输IO请求的属性，如果bfqq没有短时间大量传输IO请求就过期失效，就清理掉该属性。*/
 	if (reason == BFQQE_TOO_IDLE &&
 	    entity->service <= 2 * entity->budget / 10)
 		bfq_clear_bfqq_IO_bound(bfqq);
 
+    //bfqq->wr_coeff是1则更新bfqq->last_wr_start_finish为jiffies
 	if (bfqd->low_latency && bfqq->wr_coeff == 1)
 		bfqq->last_wr_start_finish = jiffies;
 
@@ -4183,10 +4323,11 @@ static bool bfq_may_expire_for_budg_timeout(struct bfq_queue *bfqq)
 		&&
 		bfq_bfqq_budget_timeout(bfqq);//bfqq->budget_timeout 超时时间到
 }
-
+//bfqd没有一个bfqq的权重提升了并且当前的bfqq绑定的进程有大量连续快速传输IO的特性，该函数返回true
 static bool idling_boosts_thr_without_issues(struct bfq_data *bfqd,
 					     struct bfq_queue *bfqq)
 {
+    //用的是SATA盘并且bfq总的已派发但还没完成的IO请求数很少，则rot_without_queueing为true
 	bool rot_without_queueing =
 		!blk_queue_nonrot(bfqd->queue) && !bfqd->hw_tag,
 		bfqq_sequential_and_IO_bound,
@@ -4195,7 +4336,15 @@ static bool idling_boosts_thr_without_issues(struct bfq_data *bfqd,
 	/* No point in idling for bfqq if it won't get requests any longer */
 	if (unlikely(!bfqq_process_refs(bfqq)))
 		return false;
+    /*1: !BFQQ_SEEKY(bfqq)为true表示bfqq派发的随机IO请求不多
+      2: bfq_bfqq_IO_bound 表示bfqq有向bfqq队列快速插入IO请求特性
+      3: bfqq有bfq_bfqq_has_short_ttime属性。什么意思呢?bfqq有bfq_bfqq_has_short_ttime()属性，说明进程向bfqq->sort_list插入
+	     IO请求很快，在bfqq派发IO请求没有了，bfqq->sort_list是空，先不让bfqq过期失效，而是启动idle timer，等一小段时间，
+	     看bfqq有没有来新的IO请求，没有的话再令bfqq过期失效，这样可以提升性能。
 
+	 总的来说，bfqq_sequential_and_IO_bound为true，说明bfqq有大量IO传输特性，并且bfqq绑定的进程向bfqq->sort_list插入IO请求
+	 很快。就是说，bfqq绑定的进程需要大量连续快速传输IO请求
+    */
 	bfqq_sequential_and_IO_bound = !BFQQ_SEEKY(bfqq) &&
 		bfq_bfqq_IO_bound(bfqq) && bfq_bfqq_has_short_ttime(bfqq);
 
@@ -4221,9 +4370,11 @@ static bool idling_boosts_thr_without_issues(struct bfq_data *bfqd,
 	 * particular, happens to be false if bfqd is an NCQ-capable
 	 * flash-based device.
 	 */
-	idling_boosts_thr = rot_without_queueing ||
-		((!blk_queue_nonrot(bfqd->queue) || !bfqd->hw_tag) &&
-		 bfqq_sequential_and_IO_bound);
+	//idling_boosts_thr 为true，有两种情况。1:用的是SATA盘并且bfq总的已派发但还没完成的IO请求数很少
+	//2:bfqq绑定的进程需要大量连续快速传输IO请求，并且用的SATA盘(或者IO请求在磁盘驱动传输的比较慢)
+	idling_boosts_thr = rot_without_queueing ||//用的是SATA盘并且bfq总的已派发但还没完成的IO请求数很少
+		((!blk_queue_nonrot(bfqd->queue) || !bfqd->hw_tag) &&//是SATA盘 或者 bfq总的已派发但还没完成的IO请求数比较多，说明IO在磁盘驱动传输的很慢
+		 bfqq_sequential_and_IO_bound);//bfqq绑定的进程需要大量连续快速传输IO请求
 
 	/*
 	 * The return value of this function is equal to that of
@@ -4259,6 +4410,7 @@ static bool idling_boosts_thr_without_issues(struct bfq_data *bfqd,
 	 * application and system responsiveness in these hostile
 	 * scenarios.
 	 */
+	//idling_boosts_thr为true，并且没有bfqq的权重提升了
 	return idling_boosts_thr &&
 		bfqd->wr_busy_queues == 0;
 }
@@ -4284,6 +4436,10 @@ static bool idling_boosts_thr_without_issues(struct bfq_data *bfqd,
  * functions providing the main pieces of information needed by this
  * function.
  */
+ 
+/*以下两个条件有一个成立则bfq_better_to_idle()返回true . 1:bfqd没有一个bfqq的权重提升了并且当前的bfqq绑定的进程有
+大量连续快速传输IO的特性  2:当前的bfqq权重提升了并且正在磁盘驱动层传输的IO请求比较多等等则返回true 。
+简单说，当前的bfqq还不能过期失效，有较大概率bfqq绑定的进程很快还有IO要传输*/
 static bool bfq_better_to_idle(struct bfq_queue *bfqq)
 {
 	struct bfq_data *bfqd = bfqq->bfqd;
@@ -4304,13 +4460,16 @@ static bool bfq_better_to_idle(struct bfq_queue *bfqq)
 	 * not idle because we want to minimize the bandwidth that
 	 * queues in this class can steal to higher-priority queues
 	 */
+	//异步bfqq或者idle调度算法的bfqq直接返回false
 	if (bfqd->bfq_slice_idle == 0 || !bfq_bfqq_sync(bfqq) ||
 	   bfq_class_idle(bfqq))
 		return false;
-
+    
+    //bfqd没有一个bfqq的权重提升了并且当前的bfqq绑定的进程向bfqq插入IO请求很快，则idling_boosts_thr_with_no_issue是true
 	idling_boosts_thr_with_no_issue =
 		idling_boosts_thr_without_issues(bfqd, bfqq);
-
+    
+    //当前的bfqq权重提升了并且正在磁盘驱动层传输的IO请求比较多等等则返回true
 	idling_needed_for_service_guar =
 		idling_needed_for_service_guarantees(bfqd, bfqq);
 
@@ -4335,6 +4494,8 @@ static bool bfq_better_to_idle(struct bfq_queue *bfqq)
  * and preserve service guarantees when bfq_better_to_idle itself
  * returns true.
  */
+//bfqq上没有要派发的IO请求了,但有较大概率bfqq绑定的进程很快还有新的IO请求要来，故bfqq还不能立即过期失效，
+//而是进入idle状态，启动idle_slice_timer定时器等待可能马上来的新的IO请求
 static bool bfq_bfqq_must_idle(struct bfq_queue *bfqq)
 {
 	return RB_EMPTY_ROOT(&bfqq->sort_list) && bfq_better_to_idle(bfqq);
@@ -4461,6 +4622,7 @@ static struct bfq_queue *bfq_select_queue(struct bfq_data *bfqd)
 	 * on the case where bfq_bfqq_must_idle() returns true, in
 	 * bfq_completed_request().
 	 */
+	//如果bfqq的超时时间到了，并且bfqq绑定的进程不太可能有新的IO请求到来，则令bfqq过期失效
 	if (bfq_may_expire_for_budg_timeout(bfqq) &&
 	    !bfq_bfqq_must_idle(bfqq))
 		goto expire;
@@ -4653,7 +4815,7 @@ keep_queue:
 
 	return bfqq;
 }
-//更新bfqq->bfqd->wr_busy_queues、bfqq->wr_coeff、bfqq->wr_cur_max_time、bfqq->last_wr_start_finish、bfqq->entity.prio_changed等参数
+//如果bfqq的权重提升时间用完了 或者 bfqq因权重提升消耗的配额达到了限制，则结束bfqq权重提升，bfqq->wr_coeff恢复为1等
 static void bfq_update_wr_data(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 {
 	struct bfq_entity *entity = &bfqq->entity;
@@ -4674,26 +4836,43 @@ static void bfq_update_wr_data(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 		 * time has elapsed from the beginning of this
 		 * weight-raising period, then end weight raising.
 		 */
+		//bfqq拥有bfq_bfqq_in_large_burst属性的话，就不能再权重提升了，要结束权重提升
 		if (bfq_bfqq_in_large_burst(bfqq))
+            //bfqq结束权重提升，bfqq->wr_coeff 和 bfqq->last_wr_start_finish恢复到权重提升前的状态等等
 			bfq_bfqq_end_wr(bfqq);
-		else if (time_is_before_jiffies(bfqq->last_wr_start_finish +//小于jiffes返回true
+        //bfqq->last_wr_start_finish是bfqq权重更新开始时间，bfqq->wr_cur_max_time是bfqq权重更新时间，该if成立说明
+        //bfqq的权重更新时间用完了，则可能就需要令bfqq->wr_coeff 和 bfqq->last_wr_start_finish恢复到权重提升前的状态等等
+		else if (time_is_before_jiffies(bfqq->last_wr_start_finish +
 						bfqq->wr_cur_max_time)) 
 		{
+            //1:bfqq->wr_cur_max_time != bfqd->bfq_wr_rt_max_time表示进程bfqq是交互式IO而提升权重。
+            //2:time_is_before_jiffies(bfqq->wr_start_at_switch_to_srt + bfq_wr_duration(bfqd))说明进程bfqq由交互式特性IO
+            //切换到是实时性IO，更新bfqq->wr_start_at_switch_to_srt(见bfq_update_bfqq_wr_on_rq_arrival())，并把
+            //bfqq->wr_coeff 进一步更新到 30*BFQ_SOFTRT_WEIGHT_FACTOR，然后把bfqq激活。之后派发bfqq上的IO请求，执行到
+            //bfq_dispatch_rq_from_bfqq->bfq_update_wr_data()，此时过了bfq_wr_duration(bfqd)毫秒，则该if成成立。
+            /*这个if是说，如果是交互式IO的bfqq的提升权重时间过了bfqq->wr_cur_max_time毫秒，或者bfqq由交互式IO特性切换到
+               实时性IO特性而进一步提升了权重，又过了bfq_wr_duration(bfqd)毫秒，则执行bfq_bfqq_end_wr()令bfqq结束权重提升*/
 			if (bfqq->wr_cur_max_time != bfqd->bfq_wr_rt_max_time ||
-			time_is_before_jiffies(bfqq->wr_start_at_switch_to_srt +
-					       bfq_wr_duration(bfqd)))
-			    //更新bfqq->bfqd->wr_busy_queues、bfqq->wr_coeff、bfqq->wr_cur_max_time、bfqq->last_wr_start_finish、bfqq->entity.prio_changed
+			    time_is_before_jiffies(bfqq->wr_start_at_switch_to_srt + bfq_wr_duration(bfqd)))
+			    //bfqq结束权重提升，bfqq->wr_coeff 和 bfqq->last_wr_start_finish恢复到权重提升前的状态等等
 				bfq_bfqq_end_wr(bfqq);
 			else {
+                //bfqq回到权重提升状态，增大bfqq->wr_coeff到30，更新bfqq->wr_cur_max_time为权重提升时间
 				switch_back_to_interactive_wr(bfqq, bfqd);
+                //bfqq->entity.prio_changed置1表示bfqq->wr_coeff更新了
 				bfqq->entity.prio_changed = 1;
 			}
 		}
+        
+        //bfqq->wr_cur_max_time != bfqd->bfq_wr_rt_max_time表示bfqq是交互式IO而提升权重，见bfq_update_bfqq_wr_on_rq_arrival()
+        //bfqq->service_from_wr > max_service_from_wr 表示因bfqq权重提升而消耗的配额超过上限。
+        /*这个if判断是说，如果交互式IO的进程在权重提升后消耗的配额超过max_service_from_wr则要结束bfqq的权重提升了。这样的话
+          ，实时性IO进程权重提升是没有配额限制的，交互式IO进程权重提升是有配额限制的*/
 		if (bfqq->wr_coeff > 1 &&
 		    bfqq->wr_cur_max_time != bfqd->bfq_wr_rt_max_time &&
 		    bfqq->service_from_wr > max_service_from_wr) {
 			/* see comments on max_service_from_wr */
-            //更新bfqq->bfqd->wr_busy_queues、bfqq->wr_coeff、bfqq->wr_cur_max_time、bfqq->last_wr_start_finish、bfqq->entity.prio_changed
+            //bfqq结束权重提升，bfqq->wr_coeff 和 bfqq->last_wr_start_finish恢复到权重提升前的状态等等
 			bfq_bfqq_end_wr(bfqq);
 		}
 	}
@@ -4705,7 +4884,14 @@ static void bfq_update_wr_data(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 	 * next function with the last parameter unset (see the
 	 * comments on the function).
 	 */
+	//if成立两种情况 1:(entity->weight > entity->orig_weight) 并且bfqq->wr_coeff == 1  
+	//2:(entity->weight<=entity->orig_weight)并且bfqq->wr_coeff > 1 。
+	//第1种情况是说，bfqq原本权重提升，bfqq->wr_coeff >1，
+	//但是bfqq的权重提升时间用完了或者bfqq因权重提升消耗的配额达到了限制，则上边执行bfq_bfqq_end_wr()结束bfqq权重提升而令
+	//bfqq->wr_coeff=1，此时if成立，执行__bfq_entity_update_weight_prio()真正减小bfqq的权重。第2种情况，是bfqq还没有提升
+	//权重，但是bfqq->wr_coeff > 1，if成立，执行__bfq_entity_update_weight_prio()真正增大bfqq的权重。
 	if ((entity->weight > entity->orig_weight) != (bfqq->wr_coeff > 1))
+        //这里是重点，主要是根据最新的bfqq->wr_coeff计算bfqq新的权重
 		__bfq_entity_update_weight_prio(bfq_entity_service_tree(entity),
 						entity, false);
 }
@@ -4750,7 +4936,7 @@ static struct request *bfq_dispatch_rq_from_bfqq(struct bfq_data *bfqd,
 	 * is beneficial, as bfqq is then more willing to leave the
 	 * device immediately to possible other weight-raised queues.
 	 */
-	//更新bfqq->bfqd->wr_busy_queues、bfqq->wr_coeff、bfqq->wr_cur_max_time、bfqq->last_wr_start_finish、bfqq->entity.prio_changed等参数
+	//如果bfqq的权重提升时间用完了 或者 bfqq因权重提升消耗的配额达到了限制，则结束bfqq权重提升，bfqq->wr_coeff恢复为1等
 	bfq_update_wr_data(bfqd, bfqq);
 
 	/*
@@ -5203,9 +5389,11 @@ static void bfq_init_bfqq(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 		 * idle_class, because no device idling is performed
 		 * for queues in idle class
 		 */
+		//同步bfqq默认创建时就有bfq_bfqq_has_short_ttime属性
 		if (!bfq_class_idle(bfqq))
 			/* tentatively mark as has_short_ttime */
 			bfq_mark_bfqq_has_short_ttime(bfqq);
+        
 		bfq_mark_bfqq_sync(bfqq);
 		bfq_mark_bfqq_just_created(bfqq);
 	} else
@@ -5213,7 +5401,7 @@ static void bfq_init_bfqq(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 
 	/* set end request to minus infinity from now */
 	bfqq->ttime.last_end_request = ktime_get_ns() + 1;
-
+    //bfqq默认bfqq_IO_bound属性
 	bfq_mark_bfqq_IO_bound(bfqq);
 
 	bfqq->pid = pid;
@@ -5328,26 +5516,41 @@ out:
 	rcu_read_unlock();
 	return bfqq;
 }
-
+//__bfq_insert_request()->bfq_update_io_thinktime()
 static void bfq_update_io_thinktime(struct bfq_data *bfqd,
 				    struct bfq_queue *bfqq)
 {
 	struct bfq_ttime *ttime = &bfqq->ttime;
+    //elapsed是bfqq上最近一次的IO请求传输完成到添加本次IO请求到bfqq的时间，这段时间bfqq是空闲状态，这就是thinktime吧。
+    //elapsed应该可以理解成bfqq每传输的两个IO请求之间的空闲时间，越大说明bfqq绑定的进程向bfqq插入IO请求越慢
 	u64 elapsed = ktime_get_ns() - bfqq->ttime.last_end_request;
-
+    //取最小时间
 	elapsed = min_t(u64, elapsed, 2ULL * bfqd->bfq_slice_idle);
-
+    /*简单总结，不是太准确:每传输一个IO请求，bfqq->ttime.ttime_samples增加8，ttime->ttime_total是累加时间差elapsed*8，
+    ttime->ttime_mean是ttime->ttime_samples除以ttime->ttime_mean。因此，再简单理解下，bfqq->ttime.ttime_samples是每派发
+    一个IO请求则加1，ttime->ttime_total是累加bfqq最近一次IO请求传输完成的时间与本次派发IO请求的时间，ttime->ttime_mean
+    是ttime->ttime_total/bfqq->ttime.ttime_samples。   再简单理解，ttime->ttime_samples是bfqq传输的IO请求数，
+    ttime->ttime_total是bfqq每传输两个IO请求之间的空闲时间之和，ttime->ttime_mean是平均bfqq每传输两个IO请求之间的空闲时间。*/
+   
+    /*ttime->ttime_total 和 ttime->ttime_mean越大，说明bfqq绑定的进程向bfqq插入IO请求越慢*/
+    
+    //ttime->ttime_samples应该可以这样理解，每次执行到该函数令ttime->ttime_samples增加8
 	ttime->ttime_samples = (7*bfqq->ttime.ttime_samples + 256) / 8;
+    //ttime->ttime_total应该可以理解成每次增加8*elapsed，elapsed越大，ttime->ttime_total越大
 	ttime->ttime_total = div_u64(7*ttime->ttime_total + 256*elapsed,  8);
+    //ttime->ttime_mean显然是ttime->ttime_total除以ttime->ttime_samples
 	ttime->ttime_mean = div64_ul(ttime->ttime_total + 128,
 				     ttime->ttime_samples);
 }
-
+//__bfq_insert_request()->bfq_update_io_seektime
 static void
 bfq_update_io_seektime(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 		       struct request *rq)
 {
+    /*bfqq->seek_history左移一位，每派发一个seek IO，bfqq->seek_history的bit0就置1，并且左移一位。
+    bfqq派发的seek IO越多，bfqq->seek_history的是1的bit位越多*/
 	bfqq->seek_history <<= 1;
+    //根据bfqq前后派发的两个IO的扇区地址和本次派发IO的字节数，判断出本次派发的IO是seek IO的话，则把bfqq->seek_history的bit0置1
 	bfqq->seek_history |= BFQ_RQ_SEEKY(bfqd, bfqq->last_request_pos, rq);
 
 	if (bfqq->wr_coeff > 1 &&
@@ -5355,11 +5558,12 @@ bfq_update_io_seektime(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 	    BFQQ_TOTALLY_SEEKY(bfqq))
 		bfq_bfqq_end_wr(bfqq);
 }
-
+//__bfq_insert_request()->bfq_update_has_short_ttime()
 static void bfq_update_has_short_ttime(struct bfq_data *bfqd,
 				       struct bfq_queue *bfqq,
 				       struct bfq_io_cq *bic)
 {
+    //has_short_ttime默认是true
 	bool has_short_ttime = true, state_changed;
 
 	/*
@@ -5372,6 +5576,7 @@ static void bfq_update_has_short_ttime(struct bfq_data *bfqd,
 		return;
 
 	/* Idle window just restored, statistics are meaningless. */
+    //这个if可能会成立吗?正常情况bfqq->split_time负无穷大，该if正常应该不会成立
 	if (time_is_after_eq_jiffies(bfqq->split_time +
 				     bfqd->bfq_wr_min_idle_time))
 		return;
@@ -5380,9 +5585,16 @@ static void bfq_update_has_short_ttime(struct bfq_data *bfqd,
 	 * bfqq. Otherwise check average think time to
 	 * decide whether to mark as has_short_ttime
 	 */
-	if (atomic_read(&bic->icq.ioc->active_ref) == 0 ||
-	    (bfq_sample_valid(bfqq->ttime.ttime_samples) &&
-	     bfqq->ttime.ttime_mean > bfqd->bfq_slice_idle))
+	//ttime->ttime_mean越大，说明bfqq绑定的进程向bfqq插入IO请求越慢,此时bfqq->ttime.ttime_mean > bfqd->bfq_slice_idle成立。
+	//bfq_sample_valid(bfqq->ttime.ttime_samples)为true说明传输的IO请求数大于80。二者都成立，说明，进程向bfqq->sort_list插入
+	//IO请求太慢了，于是has_short_ttime = false，下边则会bfq_clear_bfqq_has_short_ttime。bfq_bfqq_has_short_ttime
+	//应该是说bfqq拥有短时间快速传输IO请求的一种属性，如果bfqq传输IO请求太慢就bfq_clear_bfqq_has_short_ttime。
+	//bfq_bfqq_has_short_ttime()属性的应用应该是在idling_boosts_thr_without_issues()函数比较明显，说明进程向bfqq->sort_list插入
+	//IO请求很快，在bfqq派发IO请求没有了，bfqq->sort_list是空，先不让bfqq过期失效，而是启动idle timer，等一小段时间，
+	//看bfqq有没有来新的IO请求，没有的话再令bfqq过期失效，这样可以提升性能。
+	if (atomic_read(&bic->icq.ioc->active_ref) == 0 ||//active_ref为0应该说明没有进程使用bfqq了
+	    (bfq_sample_valid(bfqq->ttime.ttime_samples) &&//bfqq->ttime.ttime_samples大于80
+	     bfqq->ttime.ttime_mean > bfqd->bfq_slice_idle))//bfqq->ttime.ttime_mean大于8ms
 		has_short_ttime = false;
 
 	state_changed = has_short_ttime != bfq_bfqq_has_short_ttime(bfqq);
@@ -5493,7 +5705,7 @@ static void bfq_rq_enqueued(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 {
 	if (rq->cmd_flags & REQ_META)
 		bfqq->meta_pending++;
-    //赋值req扇区结束地址
+    //赋值要传输的req的扇区结束地址
 	bfqq->last_request_pos = blk_rq_pos(rq) + blk_rq_sectors(rq);
     
     //bfq_bfqq_wait_request()成立说明bfqq原本的IO请求已经传输完成了，但是bfqq没有立即失效，而是等待bfqq的进程是否
@@ -5591,9 +5803,11 @@ static bool __bfq_insert_request(struct bfq_data *bfqd, struct request *rq)
 		rq->elv.priv[1] = new_bfqq;
 		bfqq = new_bfqq;
 	}
-
+    //更新ttime->ttime_samples、ttime->ttime_total、ttime->ttime_mean
 	bfq_update_io_thinktime(bfqd, bfqq);
+    //更新bfqq的has_short_ttime状态
 	bfq_update_has_short_ttime(bfqd, bfqq, RQ_BIC(rq));
+    //这里边更新bfqq->seek_history
 	bfq_update_io_seektime(bfqd, bfqq, rq);
 
 	waiting = bfqq && bfq_bfqq_wait_request(bfqq);
@@ -5717,7 +5931,8 @@ static void bfq_insert_requests(struct blk_mq_hw_ctx *hctx,
 static void bfq_update_hw_tag(struct bfq_data *bfqd)
 {
 	struct bfq_queue *bfqq = bfqd->in_service_queue;
-
+    
+    //bfqd->max_rq_in_driver来自bfqd->rq_in_driver
 	bfqd->max_rq_in_driver = max_t(int, bfqd->max_rq_in_driver,
 				       bfqd->rq_in_driver);
 
@@ -5730,6 +5945,7 @@ static void bfq_update_hw_tag(struct bfq_data *bfqd)
 	 * sum is not exact, as it's not taking into account deactivated
 	 * requests.
 	 */
+	//bfq总的未传输完成的IO请求数小于等于BFQ_HW_QUEUE_THRESHOLD返回true
 	if (bfqd->rq_in_driver + bfqd->queued <= BFQ_HW_QUEUE_THRESHOLD)
 		return;
 
@@ -5738,19 +5954,22 @@ static void bfq_update_hw_tag(struct bfq_data *bfqd)
 	 * dispatch sufficient requests to hardware. Don't zero hw_tag in this
 	 * case
 	 */
+	//这个if应该还是说，如果bfq没有传输完成的IO请求太少的话直接return
 	if (bfqq && bfq_bfqq_has_short_ttime(bfqq) &&
-	    bfqq->dispatched + bfqq->queued[0] + bfqq->queued[1] <
-	    BFQ_HW_QUEUE_THRESHOLD &&
+	    bfqq->dispatched + bfqq->queued[0] + bfqq->queued[1] < BFQ_HW_QUEUE_THRESHOLD &&
 	    bfqd->rq_in_driver < BFQ_HW_QUEUE_THRESHOLD)
 		return;
 
+    //bfqd->hw_tag_samples加1，大于32才能继续向下执行，显然要采样大于32次才能到下边更新bfqd->hw_tag
 	if (bfqd->hw_tag_samples++ < BFQ_HW_QUEUE_SAMPLES)
 		return;
-
+    
+    //如果bfq已经派发但是还没传输完成的IO请求数大于3则设置bfqd->hw_tag为true，否则false
 	bfqd->hw_tag = bfqd->max_rq_in_driver > BFQ_HW_QUEUE_THRESHOLD;
 	bfqd->max_rq_in_driver = 0;
 	bfqd->hw_tag_samples = 0;
-
+    
+    //是ssd并且bfqd->hw_tag为true则设置bfqd->nonrot_with_queueing为true
 	bfqd->nonrot_with_queueing =
 		blk_queue_nonrot(bfqd->queue) && bfqd->hw_tag;
 }
@@ -5766,7 +5985,8 @@ static void bfq_completed_request(struct bfq_queue *bfqq, struct bfq_data *bfqd)
     //还没有传输完成的IO请求个数，为0表示所有的IO请求都传输完成了，跟bfqd->rq_in_driver类似
 	bfqq->dispatched--;
 
-    //如果bfqq没有要派发的IO请求了，并且bfqq不在st->active tree
+    //如果bfqq没有要派发的IO请求了而过期失效，bfqq加入st->idle tree，然后bfqq派发最后一个IO请求，等该IO请求传输
+    //完成后执行到bfq_completed_request()，该if就成立
 	if (!bfqq->dispatched && !bfq_bfqq_busy(bfqq)) {
 		/*
 		 * Set budget_timeout (which we overload to store the
@@ -5840,6 +6060,8 @@ static void bfq_completed_request(struct bfq_queue *bfqq, struct bfq_data *bfqd)
 	 */
 	//bfqq是当前传输完成的req的bfqq，它是bfq当前正在使用bfqq(即bfqd->in_service_queue)时才成立
 	if (bfqd->in_service_queue == bfqq) {
+        //bfqq上没有要派发的IO请求了,但有较大概率bfqq绑定的进程很快还有新的IO请求要来，故bfqq还不能立即过期失效，
+        //而是进入idle状态，启动idle timer定时器等待可能马上来的新的IO请求
 		if (bfq_bfqq_must_idle(bfqq)) {
             //bfqq->dispatched为0表示本次派发完成的IO请求是bfqq最后一个，就是说bfqq目前派发的IO请求都传输完成了。但是bfqq
             //后续短时间内可能还会派发IO请求，于是执行执行bfq_arm_slice_timer()标记bfqq_wait_request。然后启动
@@ -5848,7 +6070,7 @@ static void bfq_completed_request(struct bfq_queue *bfqq, struct bfq_data *bfqd)
             //是执行下边的bfq_bfqq_expire()令bfqq过期失效。这样如果bfqq过了短暂的时间，bfqq又有新的IO请求来了，bfqq还得激活，
             //还得被bfq调度到，才能派发这个IO请求，这就会造成延迟。现在是令bfqq本没有要派发的IO请求了而延迟过期失效，如果
             //短时间内就来了新的IO请求，就能立即调度派发，挺巧妙。另外提一点，在派发IO请求执行到bfq_select_queue()函数，
-            //如果bfqq被设置了bfqq_wait_request标记，说明它启动了ilde timer延迟失效，但现在新的IO请求派发，于是就
+            //如果bfqq被设置了bfqq_wait_request标记，说明它启动了idle timer延迟失效，但现在新的IO请求派发，于是就
             //bfq_clear_bfqq_wait_request()清理bfqq_wait_request标记，并hrtimer_try_to_cancel()取消idle timer定时器。
 			if (bfqq->dispatched == 0)
 				bfq_arm_slice_timer(bfqd);//里边执行bfq_mark_bfqq_wait_request()
@@ -6358,7 +6580,7 @@ static struct bfq_queue *bfq_init_rq(struct request *rq)
 	 * addition, if the queue has also just been split, we have to
 	 * resume its state.
 	 */
-	if (likely(bfqq != &bfqd->oom_bfqq) && bfqq_process_refs(bfqq) == 1) {
+	if (likely(bfqq != &bfqd->oom_bfqq) && bfqq_process_refs(bfqq) == 1) {//测试这里有成立
 		bfqq->bic = bic;
 		if (split) {
 			/*
@@ -6398,7 +6620,7 @@ static struct bfq_queue *bfq_init_rq(struct request *rq)
 
 	return bfqq;
 }
-
+//idle timer定时间到执行bfq_idle_slice_timer_body()函数
 static void
 bfq_idle_slice_timer_body(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 {
@@ -6617,19 +6839,21 @@ static int bfq_init_queue(struct request_queue *q, struct elevator_type *e)
 {
 	struct bfq_data *bfqd;
 	struct elevator_queue *eq;
-
+    //分配elevator_queue
 	eq = elevator_alloc(q, e);
 	if (!eq)
 		return -ENOMEM;
-
+    //分配bfqd
 	bfqd = kzalloc_node(sizeof(*bfqd), GFP_KERNEL, q->node);
 	if (!bfqd) {
 		kobject_put(&eq->kobj);
 		return -ENOMEM;
 	}
+    //指向bfqd
 	eq->elevator_data = bfqd;
 
 	spin_lock_irq(&q->queue_lock);
+    //bfqd与运行队列request_queue建立联系
 	q->elevator = eq;
 	spin_unlock_irq(&q->queue_lock);
 

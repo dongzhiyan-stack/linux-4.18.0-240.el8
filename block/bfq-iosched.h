@@ -215,7 +215,7 @@ struct bfq_entity {//bfq_sched_data、bfq_service_tree、bfq_entity 3者关系见bfq_e
 	 * bfq_group_data */
 	int dev_weight;
 	/* weight of the queue */
-	int weight;//bfqq权重,bfq_init_entity()中初始化
+	int weight;//bfqq权重,bfq_init_entity()中初始化，__bfq_entity_update_weight_prio()中动态更新
 	/* next weight if a change is in progress */
 	int new_weight;
 
@@ -236,7 +236,8 @@ struct bfq_entity {//bfq_sched_data、bfq_service_tree、bfq_entity 3者关系见bfq_e
 	/* flag, set to request a weight, ioprio or ioprio_class change  */
     //bfq_dispatch_rq_from_bfqq->bfq_update_wr_data-> bfq_bfqq_end_wr中更新为1
     //bfq_dispatch_rq_from_bfqq->bfq_update_wr_data->switch_back_to_interactive_wr中更新为1
-	int prio_changed;
+    //bfq_bfqq_handle_idle_busy_switch()中置1
+	int prio_changed;//如果bfqq->wr_coeff变化了，就把bfqq->entity.prio_changed置1
 
 	/* flag, set if the entity is counted in groups_with_pending_reqs */
 	bool in_groups_with_pending_reqs;
@@ -247,15 +248,16 @@ struct bfq_group;
 /**
  * struct bfq_ttime - per process thinktime stats.
  */
-//bfq_update_io_thinktime()中更新大部分成员
+//bfq_update_io_thinktime()中更新大部分成员，有详细注释
 struct bfq_ttime {
 	/* completion time of the last request */
-	u64 last_end_request;//bfq_completed_request()中req传输完成赋值当前时间
+	u64 last_end_request;//bfq_completed_request()中赋值为最近一次bfqq上IO请求传输完成的时间，bfq_init_bfqq()默认赋于当前时间
 
+    //ttime->ttime_total 和 ttime->ttime_mean越大，说明bfqq绑定的进程向bfqq插入IO请求越慢
 	/* total process thinktime */
 	u64 ttime_total;
 	/* number of thinktime samples */
-	unsigned long ttime_samples;
+	unsigned long ttime_samples;//传输的IO请求个数
 	/* average process thinktime */
 	u64 ttime_mean;
 };
@@ -326,8 +328,8 @@ struct bfq_queue {
     //bfq_updated_next_req()中根据bfqq->max_budget计算新的entity的配额entity->budget
 	int max_budget;
 	/* budget expiration (in jiffies) */
-    //bfq_init_bfqq()中赋初值。bfq_bfqq_budget_timeout()中判断bfqq->budget_timeout大于jiffies,则bfqq运行时间太长了，该bfqq要失效了
-    //bfq_completed_request当req传输完成赋值jiffies。bfq_set_budget_timeout()设置bfqq的超时时间
+    //bfq_init_bfqq()中赋初值。bfq_bfqq_budget_timeout()中判断bfqq->budget_timeout大于jiffies,则bfqq运行时间太长了，该bfqq要失效了。
+    //bfq_completed_request()中可能赋值req传输完成时间。__bfq_set_in_service_queue()->bfq_set_budget_timeout()设置bfqq的超时时间
 	unsigned long budget_timeout;
 
 	/* number of requests on the dispatch list or inside driver */
@@ -344,13 +346,15 @@ struct bfq_queue {
 	struct bfq_ttime ttime;
 
 	/* bit vector: a 1 for each seeky requests in history */
-	u32 seek_history;//bfq_update_io_seektime()中更新
+    //__bfq_insert_request()->bfq_update_io_seektime()中更新，应该表示bfqq派发的IO是不是随机IO，如果连续派发的随机IO越多seek_history越大
+	u32 seek_history;//bfq_init_bfqq()中赋初值1
 
 	/* node for the device's burst list */
 	struct hlist_node burst_list_node;
 
 	/* position of the last request enqueued */
-	sector_t last_request_pos;//bfq_rq_enqueued()中赋值req的扇区结束地址
+    //__bfq_insert_request()->bfq_rq_enqueued()中赋值req的扇区结束地址,就是上一次派发的IO请求的扇区结束地址
+	sector_t last_request_pos;
 
 	/* Number of consecutive pairs of request completion and
 	 * arrival, such that the queue becomes idle after the
@@ -370,8 +374,9 @@ struct bfq_queue {
 	struct bfq_io_cq *bic;//bfq_init_rq()中赋值
 
 	/* current maximum weight-raising time for this queue */
-    //bfq_dispatch_rq_from_bfqq->bfq_update_wr_data-> bfq_bfqq_end_wr中更新为0
-    //bfq_dispatch_rq_from_bfqq->bfq_update_wr_data->switch_back_to_interactive_wr中更新为bfq_wr_duration(bfqd)
+    //bfq_dispatch_rq_from_bfqq->bfq_update_wr_data-> bfq_bfqq_end_wr() 中更新为0
+    //bfq_dispatch_rq_from_bfqq->bfq_update_wr_data->switch_back_to_interactive_wr() 中更新为bfq_wr_duration(bfqd)
+    //bfq_bfqq_handle_idle_busy_switch()->bfq_update_bfqq_wr_on_rq_arrival()中更新为bfq_wr_duration(bfqd)或bfqd->bfq_wr_rt_max_time
 	unsigned long wr_cur_max_time;
 	/*
 	 * Minimum time instant such that, only if a new request is
@@ -380,19 +385,26 @@ struct bfq_queue {
 	 * queue it is deemed as soft real-time (see the comments on
 	 * the function bfq_bfqq_softrt_next_start())
 	 */
-	unsigned long soft_rt_next_start;
+	unsigned long soft_rt_next_start;//bfq_bfqq_expire()更新
 	/*
 	 * Start time of the current weight-raising period if
 	 * the @bfq-queue is being weight-raised, otherwise
 	 * finish time of the last weight-raising period.
 	 */
-	//bfq_dispatch_rq_from_bfqq->bfq_update_wr_data-> bfq_bfqq_end_wr中更新为jiffies，
-	//bfq_dispatch_rq_from_bfqq->bfq_update_wr_data->switch_back_to_interactive_wr中更新为bfqq->wr_start_at_switch_to_srt
+	//bfq_init_bfqq()中赋初值jiffies
+	//bfq_dispatch_rq_from_bfqq->bfq_update_wr_data->bfq_bfqq_end_wr()，此时last_wr_start_finish记录的是bfqq权重更新结束时间
+	//bfq_dispatch_rq_from_bfqq->bfq_update_wr_data->switch_back_to_interactive_wr()中更新为bfqq->wr_start_at_switch_to_srt
+	//bfq_add_request()->bfq_bfqq_handle_idle_busy_switch()->bfq_update_bfqq_wr_on_rq_arrival在实时IO特性的bfqq在权重提升期间传输IO，更新为jiffies
+	//bfq_add_request()最后赋值为jiffies，此时last_wr_start_finish记录的是bfqq权重更新开始时间
+	//bfq_bfqq_expire()中bfqq过期失效赋值为jiffies，在bfqq->wr_coeff是1的情况下
+	/*last_wr_start_finish可以理解为bfqq权重提升的开始时间，并且在bfqq权重提升结束时。
+	bfq_add_request()最后对last_wr_start_finish有详细注释*/
 	unsigned long last_wr_start_finish;
+	
 	/* factor by which the weight of this queue is multiplied */
     //bfq_dispatch_rq_from_bfqq->bfq_update_wr_data-> bfq_bfqq_end_wr中更新为1
     //bfq_dispatch_rq_from_bfqq->bfq_update_wr_data->switch_back_to_interactive_wr中更新为bfqd->bfq_wr_coeff
-	unsigned int wr_coeff;//测试时有30或1，bfq_init_bfqq()初值是1
+	unsigned int wr_coeff;//bfq_init_bfqq()初值是1，bfq_update_bfqq_wr_on_rq_arrival()赋值为bfqd->bfq_wr_coeff即30
 	/*
 	 * Time of the last transition of the @bfq_queue from idle to
 	 * backlogged.
@@ -409,13 +421,16 @@ struct bfq_queue {
 	 * Cumulative service received from the @bfq_queue since its
 	 * last transition to weight-raised state.
 	 */
-	unsigned long service_from_wr;//bfq_bfqq_served()中累加待派发req的配额served
+	//是bfqq在权重提升的情况下消耗的配额，bfq_bfqq_served()中累加
+	unsigned long service_from_wr;
 
 	/*
 	 * Value of wr start time when switching to soft rt
 	 */
+	//bfq_init_bfqq()赋初值为很大的负数，bfq_update_bfqq_wr_on_rq_arrival()中赋值。如果bfqq原本是交互式IO，然后又被判定为
+	//实时性IO，此时在bfq_update_bfqq_wr_on_rq_arrival()中就会把wr_start_at_switch_to_srt更新为jiffies，有详细解释
 	unsigned long wr_start_at_switch_to_srt;
-
+    //bfq_init_bfqq()赋初值为很大的负数
 	unsigned long split_time; /* time of last split */
     //bfq_dispatch_rq_from_bfqq->bfq_bfqq_served queue 第一次派发req的时间
 	unsigned long first_IO_time; /* time of first I/O for this queue */
@@ -445,7 +460,7 @@ struct bfq_queue {
 /**
  * struct bfq_io_cq - per (request_queue, io_context) structure.
  */
-//struct bfq_io_cq  就是bic，bic是什么玩意?
+//struct bfq_io_cq  就是bic
 struct bfq_io_cq {
 	/* associated io_cq structure */
 	struct io_cq icq; /* must be the first member */
@@ -504,6 +519,7 @@ struct bfq_io_cq {
  *
  * All the fields are protected by @lock.
  */
+//bfq_init_queue()中分配bfqd并初始化大部分工具，并建立与request_queue的联系
 struct bfq_data {
 	/* device request queue */
 	struct request_queue *queue;
@@ -582,10 +598,10 @@ struct bfq_data {
 	unsigned int busy_queues[3];
 	/* number of weight-raised busy @bfq_queues */
     //bfq_dispatch_rq_from_bfqq->bfq_update_wr_data-> bfq_bfqq_end_wr中减1，繁忙的bfqq个数。bfq_add_bfqq_busy()中加1
-    //bfq_del_bfqq_busy()中减1
+    //bfq_del_bfqq_busy()中减1，但是有个前提，bfqq->wr_coeff要大于1
 	int wr_busy_queues;
 	/* number of queued requests */
-	int queued;//bfq_add_request()中加1，，bfq_remove_request()减1
+	int queued;//bfq_add_request()中加1，bfq_remove_request()减1
 	/* number of requests dispatched and waiting for completion */
 	int rq_in_driver;//已经派发但是还没传输完成的req个数，bfq_completed_request()中减1，__bfq_dispatch_request()中加1
 
@@ -600,6 +616,8 @@ struct bfq_data {
 	/* number of samples used to calculate hw_tag */
 	int hw_tag_samples;
 	/* flag set to one if the driver is showing a queueing behavior */
+    //bfq_completed_request()->bfq_update_hw_tag()IO请求传输完成更新hw_tag，
+    //bfq已经派发但是还没传输完成的IO请求数大于3则设置bfqd->hw_tag为true
 	int hw_tag;
 
 	/* number of budgets assigned */
@@ -654,10 +672,11 @@ struct bfq_data {
 	u64 last_dispatch;//bfq_update_peak_rate()中记录本次派发req的时间
 
 	/* beginning of the last budget */
-	ktime_t last_budget_start;//bfq_set_budget_timeout()中设置为当前时间
+    //bfq_set_in_service_queue->__bfq_set_in_service_queue->bfq_set_budget_timeout()中设置为当前时间
+	ktime_t last_budget_start;
 	/* beginning of the last idle slice */
-	ktime_t last_idling_start;
-	unsigned long last_idling_start_jiffies;
+	ktime_t last_idling_start;//bfq_arm_slice_timer()中设置为启动定时器的时间
+	unsigned long last_idling_start_jiffies;//bfq_arm_slice_timer()中设置为启动定时器的时间
 
 	/* number of samples in current observation interval */
 	int peak_rate_samples;//bfq_dispatch_remove->bfq_update_peak_rate()中每派发一个IO请求则加1
@@ -697,7 +716,7 @@ struct bfq_data {
 	/* maximum allowed backward seek */
 	unsigned int bfq_back_max;
 	/* maximum idling time */
-	u32 bfq_slice_idle;
+	u32 bfq_slice_idle;//bfq_init_queue()赋初值8ms
 
 	/* user-configured max budget value (0 for auto-tuning) */
 	int bfq_user_max_budget;
@@ -718,7 +737,7 @@ struct bfq_data {
 	 * was marked as non-I/O-bound (see the definition of the
 	 * IO_bound flag for further details).
 	 */
-	unsigned int bfq_requests_within_timer;
+	unsigned int bfq_requests_within_timer;//bfq_init_queue()中默认120
 
 	/*
 	 * Force device idling whenever needed to provide accurate
@@ -759,31 +778,33 @@ struct bfq_data {
 	struct hlist_head burst_list;
 
 	/* if set to true, low-latency heuristics are enabled */
-	bool low_latency;
+	bool low_latency;//bfq_init_queue()默认初值1
 	/*
 	 * Maximum factor by which the weight of a weight-raised queue
 	 * is multiplied.
 	 */
-	unsigned int bfq_wr_coeff;
+	unsigned int bfq_wr_coeff;//bfq_init_queue()赋初值30
 	/* maximum duration of a weight-raising period (jiffies) */
-	unsigned int bfq_wr_max_time;
+	unsigned int bfq_wr_max_time;//bfq_init_queue()中赋值0
 
 	/* Maximum weight-raising duration for soft real-time processes */
-	unsigned int bfq_wr_rt_max_time;
+	unsigned int bfq_wr_rt_max_time;//bfq_init_queue()赋初值300
 	/*
 	 * Minimum idle period after which weight-raising may be
 	 * reactivated for a queue (in jiffies).
 	 */
+	//bfq_init_queue()赋值2000ms
 	unsigned int bfq_wr_min_idle_time;
 	/*
 	 * Minimum period between request arrivals after which
 	 * weight-raising may be reactivated for an already busy async
 	 * queue (in jiffies).
 	 */
+	//bfq_init_queue()赋初值500ms
 	unsigned long bfq_wr_min_inter_arr_async;
 
 	/* Max service-rate for a soft real-time queue, in sectors/sec */
-	unsigned int bfq_wr_max_softrt_rate;
+	unsigned int bfq_wr_max_softrt_rate;//bfq_init_queue()中赋值7000
 	/*
 	 * Cached value of the product ref_rate*ref_wr_duration, used
 	 * for computing the maximum duration of weight raising

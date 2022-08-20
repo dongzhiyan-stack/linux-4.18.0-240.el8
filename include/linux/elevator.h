@@ -112,10 +112,11 @@ struct request *elv_rqhash_find(struct request_queue *q, sector_t offset);
 /*
  * each queue has an elevator_queue associated with it
  */
+//bfq_init_queue()中分配elevator_queue
 struct elevator_queue
 {
 	struct elevator_type *type;
-	void *elevator_data;
+	void *elevator_data;//bfq_init_queue()中赋值bfqd
 	struct kobject kobj;
 	struct mutex sysfs_lock;
 	unsigned int registered:1;

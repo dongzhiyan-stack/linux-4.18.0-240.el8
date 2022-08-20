@@ -43,7 +43,7 @@ static unsigned int bfq_class_idx(struct bfq_entity *entity)
 	return bfqq ? bfqq->ioprio_class - 1 :
 		BFQ_DEFAULT_GRP_CLASS - 1;
 }
-//只要有有一个bfqq可使用就返回非0，除非没有一个bfqq则返回0
+//bfq所有调度算法在st->active tree的bfqq个数
 unsigned int bfq_tot_busy_queues(struct bfq_data *bfqd)
 {
 	return bfqd->busy_queues[0] + bfqd->busy_queues[1] +
@@ -777,8 +777,9 @@ struct bfq_service_tree *bfq_entity_service_tree(struct bfq_entity *entity)
  * invoked with update_class_too unset in the points in the code where
  * entity may happen to be on some tree.
  */
+//主要是根据bfqq->wr_coeff计算bfqq新的权重
 struct bfq_service_tree *
-__bfq_entity_update_weight_prio(struct bfq_service_tree *old_st,
+__bfq_entity_update_weight_prio(struct bfq_service_tree *old_st,//entity所属调度器st
 				struct bfq_entity *entity,
 				bool update_class_too)
 {
@@ -806,6 +807,7 @@ __bfq_entity_update_weight_prio(struct bfq_service_tree *old_st,
 
 		/* Matches the smp_wmb() in bfq_group_set_weight. */
 		smp_rmb();
+        //老的调度器st->wsum减去entity->weight
 		old_st->wsum -= entity->weight;
 
 		if (entity->new_weight != entity->orig_weight) {
@@ -813,15 +815,17 @@ __bfq_entity_update_weight_prio(struct bfq_service_tree *old_st,
 			    entity->new_weight > BFQ_MAX_WEIGHT) {
 				pr_crit("update_weight_prio: new_weight %d\n",
 					entity->new_weight);
+                //更新entity->new_weight
 				if (entity->new_weight < BFQ_MIN_WEIGHT)
 					entity->new_weight = BFQ_MIN_WEIGHT;
 				else
 					entity->new_weight = BFQ_MAX_WEIGHT;
 			}
+            //更新entity->orig_weight
 			entity->orig_weight = entity->new_weight;
+            //更新bfqq->ioprio
 			if (bfqq)
-				bfqq->ioprio =
-				  bfq_weight_to_ioprio(entity->orig_weight);
+				bfqq->ioprio = bfq_weight_to_ioprio(entity->orig_weight);
 		}
 
 		if (bfqq && update_class_too)
@@ -844,8 +848,8 @@ __bfq_entity_update_weight_prio(struct bfq_service_tree *old_st,
 		new_st = bfq_entity_service_tree(entity);
 
 		prev_weight = entity->weight;
-		new_weight = entity->orig_weight *
-			     (bfqq ? bfqq->wr_coeff : 1);
+        //根据bfqq->wr_coeff计算bfqq新的权重，很明显bfqq->wr_coeff越大计算出的权重越大
+		new_weight = entity->orig_weight * (bfqq ? bfqq->wr_coeff : 1);
 		/*
 		 * If the weight of the entity changes, and the entity is a
 		 * queue, remove the entity from its old weight counter (if
@@ -855,6 +859,7 @@ __bfq_entity_update_weight_prio(struct bfq_service_tree *old_st,
 			root = &bfqd->queue_weights_tree;
 			__bfq_weights_tree_remove(bfqd, bfqq, root);
 		}
+        //新的权重更新到entity->weight
 		entity->weight = new_weight;
 		/*
 		 * Add the entity, if it is not a weight-raised queue,
@@ -864,13 +869,13 @@ __bfq_entity_update_weight_prio(struct bfq_service_tree *old_st,
 			/* If we get here, root has been initialized. */
 			bfq_weights_tree_add(bfqd, bfqq, root);
 		}
-
+        //调度器的st->wsum累加entity新的权重entity->weight
 		new_st->wsum += entity->weight;
 
 		if (new_st != old_st)
 			entity->start = new_st->vtime;
 	}
-
+    //测试new_st 和 old_st是同一个
 	return new_st;
 }
 
@@ -1842,7 +1847,8 @@ void bfq_add_bfqq_busy(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 		if (bfqq->wr_coeff == 1)
 			bfq_weights_tree_add(bfqd, bfqq,
 					     &bfqd->queue_weights_tree);
-
+        
+    //bfqq的权重提升了，则权重提升的bfqq个数bfqd->wr_busy_queues加1
 	if (bfqq->wr_coeff > 1)
 		bfqd->wr_busy_queues++;
 }
