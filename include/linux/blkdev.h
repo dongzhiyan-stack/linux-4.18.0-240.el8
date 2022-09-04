@@ -191,7 +191,7 @@ struct request {
             //rq->elv.priv[1]保存新分配的bfqq，rq->elv.priv[0]保存bic，bic来自req->elv->icq指针所在的bfq_io_cq
             //bfq_init_rq()新的req插入时，先查找rq->elv.priv[1]中是否有bfqq，有的话直接从取出返回，否则才会分配新的bfqq
             //bfq_init_rq()中rq->elv.priv[0] = bic;rq->elv.priv[1] = bfqq; __bfq_insert_request()中rq->elv.priv[1] = new_bfqq
-			void			*priv[2];
+			void			*priv[2];//bfq_finish_requeue_request()中对rq->elv.priv[0]和rq->elv.priv[1]清0
 		} elv;
 
 		struct {

@@ -397,12 +397,13 @@ static void bfq_insert(struct rb_root *root, struct bfq_entity *entity)
 		entry = rb_entry(parent, struct bfq_entity, rb_node);
         //entity->finish小于红黑树节点的entry->finish则if成立，然后取出entry的左节点。显然，
         //st->idle或者st->active红黑树中的的entity是按照entity->finish由小到大从左到右进行排序的
-		if (bfq_gt(entry->finish, entity->finish))
+		if (bfq_gt(entry->finish, entity->finish))//待插入红黑树的entity->finish更小则if成立，取出左节点
 			node = &parent->rb_left;
 		else
 			node = &parent->rb_right;
 	}
-
+    /*到这里时，parent指向entity要插入的rb_node节点，node指向parent的左或右节点的地址，这里是把entity->rb_node
+     保存到node。其实就是把待插入entity插入到parent这个节点的左或右节点*/
 	rb_link_node(&entity->rb_node, parent, node);
 	rb_insert_color(&entity->rb_node, root);
     //entity->tree指向st->active或者st->idle树根节点
@@ -428,7 +429,7 @@ static void bfq_update_min(struct bfq_entity *entity, struct rb_node *node)
 		child = rb_entry(node, struct bfq_entity, rb_node);
         //entity->min_start大于child->min_start成立，更新entity->min_start为更小的child->min_start。这是什么用意?child是entity
         //的在红黑树下边的左节点或者右节点，即子节点，如果子节点的min_start更小，就用子节点的min_start更新entity->min_start
-		if (bfq_gt(entity->min_start, child->min_start))
+		if (bfq_gt(entity->min_start, child->min_start))//entity->min_start > child->min_start
 			entity->min_start = child->min_start;
 	}
 }
@@ -1472,18 +1473,19 @@ static struct bfq_entity *bfq_first_active_entity(struct bfq_service_tree *st,
 						  u64 vtime)
 {
 	struct bfq_entity *entry, *first = NULL;
+    //根节点
 	struct rb_node *node = st->active.rb_node;
 
 	while (node) {
 		entry = rb_entry(node, struct bfq_entity, rb_node);
 left:
-		if (!bfq_gt(entry->start, vtime))//entry->start < vtime 则if成立
+		if (!bfq_gt(entry->start, vtime))//entry->start <= vtime 则if成立，
 			first = entry;
 
 		if (node->rb_left) {//如果entry有左节点，一直向左查找，有靠左的entry，entry->start和entry->min_start越小
 			entry = rb_entry(node->rb_left,
 					 struct bfq_entity, rb_node);
-			if (!bfq_gt(entry->min_start, vtime)) {
+			if (!bfq_gt(entry->min_start, vtime)) {//entry->min_start <= vtime 则if成立，goto left
 				node = node->rb_left;
 				goto left;
 			}

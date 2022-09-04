@@ -902,7 +902,7 @@ static struct request *bfq_check_fifo(struct bfq_queue *bfqq,
 				      struct request *last)
 {
 	struct request *rq;
-    //bfqq->fifo链表的req达到了派发时间
+    //bfqq->fifo链表上的req都没有达到派发时间直接返回NULL
 	if (bfq_bfqq_fifo_expire(bfqq))
 		return NULL;
 
@@ -1795,7 +1795,7 @@ static void bfq_bfqq_handle_idle_busy_switch(struct bfq_data *bfqd,
 	soft_rt = bfqd->bfq_wr_max_softrt_rate > 0 &&
 		!BFQQ_TOTALLY_SEEKY(bfqq) &&
 		!in_burst &&
-		time_is_before_jiffies(bfqq->soft_rt_next_start) &&
+		time_is_before_jiffies(bfqq->soft_rt_next_start) &&//在bfqq->soft_rt_next_start时间后执行到这里
 		bfqq->dispatched == 0;
     
     //bfqq没有bfq_bfqq_in_large_burst属性，并且bfqq处于st->idle tree很长时间则interactive是1，这表示bfqq绑定的进程是交互式IO，
@@ -1934,7 +1934,7 @@ static void bfq_bfqq_handle_idle_busy_switch(struct bfq_data *bfqd,
 		bfq_bfqq_expire(bfqd, bfqd->in_service_queue,
 				false, BFQQE_PREEMPTED);
 }
-
+//bfqq->last_serv_time_ns = 0、bfqq->decrease_time_jif = jiffies、bfqd->waited_rq = NULL、bfqq->inject_limit被设置0或者1
 static void bfq_reset_inject_limit(struct bfq_data *bfqd,
 				   struct bfq_queue *bfqq)
 {
@@ -1993,6 +1993,10 @@ static void bfq_reset_inject_limit(struct bfq_data *bfqd,
 	 * limit-update algorithm and possibly raise the limit to more
 	 * than 1.
 	 */
+	
+	//bfqq有bfq_bfqq_has_short_ttime属性，令bfqq->inject_limit=0，就不允许inject bfqq抢占该bfqq。只有
+	//bfqd->rq_in_driver <inject_limit才运行inject bfqq抢占该bfqq，具体看bfq_choose_bfqq_for_injection()。
+	//如果bfqq没有bfq_bfqq_has_short_ttime属性，令bfqq->inject_limit = 1，则bfqd->rq_in_driver <inject_limit就有可能成立。
 	if (bfq_bfqq_has_short_ttime(bfqq))
 		bfqq->inject_limit = 0;
 	else
@@ -2011,10 +2015,14 @@ static void bfq_add_request(struct request *rq)
 	bool interactive = false;
 
 	bfq_log_bfqq(bfqd, bfqq, "add_request %d", rq_is_sync(rq));
+    //入队IO请求书加1
 	bfqq->queued[rq_is_sync(rq)]++;
 	bfqd->queued++;
 
-	if (RB_EMPTY_ROOT(&bfqq->sort_list) && bfq_bfqq_sync(bfqq)) {//成立
+    //bfqq队列上没有IO请求 并且 当前向bfqq队列插入的IO请求是同步IO。此时bfqq要么还处于st->idle tree，这里添加第一个IO请求，
+    //接着后边激活它。或者bfqq始终处于st->active tree但是IO请求都派发完了这里很快又添加新的IO请求。
+	if (RB_EMPTY_ROOT(&bfqq->sort_list) && bfq_bfqq_sync(bfqq)) 
+    {
 		/*
 		 * Detect whether bfqq's I/O seems synchronized with
 		 * that of some other queue, i.e., whether bfqq, after
@@ -2069,13 +2077,47 @@ static void bfq_add_request(struct request *rq)
 		 * confirmed no later than during the next
 		 * I/O-plugging interval for bfqq.
 		 */
+        
 		if (bfqd->last_completed_rq_bfqq &&
-		    !bfq_bfqq_has_short_ttime(bfqq) &&
-		    ktime_get_ns() - bfqd->last_completion <//当前时间与bfqd->last_completion时间差小于200us
-		    200 * NSEC_PER_USEC) {
+		    !bfq_bfqq_has_short_ttime(bfqq) &&//IO传输期间没有快速向该bfqq队列插入IO请求的标记，一般不成立
+		    //当前时间与bfq上一次传输完成IO请求的时间bfqd->last_completion时间差小于200us，说明是IO请求传输完很快就向bfqq添加第一个IO请求
+		    ktime_get_ns() - bfqd->last_completion < 200 * NSEC_PER_USEC)
+		{
+         /*1:执行到这里，说明bfqq队列上没有IO请求，现在是向bfqq队列插入第一个IO请求。bfqd->last_completed_rq_bfqq != bfqq
+            如果成立，说明这个bfqq之前不应该处于st->active tree，而是IO请求派发完了过期失效被移动到了st->idle tree。
+            bfqd->last_completed_rq_bfqq是最近一次传输完成的IO请求所属的bfqq，大概率是bfqd->in_service_queue。
+            bfqd->last_completed_rq_bfqq != bfqq如果成立，bfqq肯定最近一段时间没有派发过bfqq，而是处于st->idle tree，
+            因为此时bfqq队列上还没有IO请求，bfqq肯定不会处于st->active tree。第一次bfqd->last_completed_rq_bfqq != bfqq->waker_bfqq
+            也成立，然后就执行里边的bfqq->waker_bfqq = bfqd->last_completed_rq_bfqq。把最近在传输IO请求的
+            bfqd->last_completed_rq_bfqq赋于bfqq->waker_bfqq。
+            
+            2:为了方便叙述，此时的bfqd->last_completed_rq_bfqq称为bfqq1，bfqq->waker_bfqq称为bfqq2，bfqq2->waker_bfqq=bfqq1。
+            bfqq1现在是bfqd->in_service_queue，等它过期失效。bfq调度到bfqq2作为bfqd->in_service_queue，等派发完bfqq2上的IO请求，
+            bfqq2过期失效，被移入st->idle tree。然后又调度到bfqq1作为bfqd->in_service_queue，开始派发bfqq1上的IO请求。
+            
+            3:继续，bfqq1上的IO请求传输完成，bfqd->last_completed_rq_bfqq此时又是bfqq1。然后，又向处于st->idle tree的bfqq2
+            插入IO请求，就又会执行到这里。bfqd->last_completed_rq_bfqq != bfqq不成立，即bfqq1!=bfqq2，
+            bfqd->last_completed_rq_bfqq==bfqq->waker_bfqq，这都是bfqq1。这个if不成立，走else分支的
+            else if (bfqd->last_completed_rq_bfqq == bfqq->waker_bfqq && !bfq_bfqq_has_waker(bfqq))， 执行
+            bfq_mark_bfqq_has_waker(bfqq)，对bfqq2加上bfq_bfqq_has_waker标记。这是什么意思呢?将来bfqq2上的IO请求派发完了，
+            bfqq2上的最后一个IO请求传输完成执行到bfq_completed_request()函数，不会执行bfq_bfqq_expire()令bfqq2因没有IO请求
+            而过期失效，而是执行bfq_arm_slice_timer()启动idle timer定时器，并对bfqq加上bfq_bfqq_wait_request标记。然后再
+            派发IO请求时执行到__bfq_dispatch_request->bfq_select_queue()，bfqq2->next_rq是NULL，则
+            if (bfq_bfqq_wait_request(bfqq) ||(bfqq->dispatched != 0 && bfq_better_to_idle(bfqq)))分支成立，有概率执行
+            bfqq = bfqq->waker_bfqq，本质就是取出bfqq2->waker_bfqq即bfqq1赋于bfqq，之后就派发bfqq1上的IO请求了。
+
+            总结，waker_bfqq有什么作用呢?首先得有两个bfqq:bfqq1和bfqq2，bfqq2的IO特性是每次都是因IO请求传输完了过期失效而
+            处于st->idle tree，但是很快bfqq2就会有新的IO请求要派发。在bfqq2处于st->idle tree 期间，bfqq1被选为
+            bfqd->in_service_queue而派发它上边的IO请求。在派发bfqq1上的IO请求期间，bfqq2很快就来了新的IO请求。这样持续两次
+            就执行bfqq2->waker_bfqq = bfqq1，令bfqq1作为bfqq2的waker_bfqq。这样等bfqq2被选中为bfqd->in_service_queue，
+            并再次派发完它的IO请求，因为bfqq2可能马上回来新的IO请求而不能立即过期失效，则要启动idle timer并标记
+            bfq_bfqq_wait_request，进入bettle idle状态。这样做就会有一段时间bfq没有可派发的IO请求，出现hole，损失bfq吞吐量。
+            而这段时间正好可以选中bfqq2->waker_bfqq即bfqq1，派发bfqq1上的IO请求，不损失bfq吞吐量。waker_bfqq的出现就是保证
+            bfqq在没有IO请求可派发，但不能过期过期而要进入bettle idle状态，该期间派发waker_bfqq上的IO请求，达到不损失吞吐量的目的
+           */
 			if (bfqd->last_completed_rq_bfqq != bfqq &&
-			    bfqd->last_completed_rq_bfqq !=
-			    bfqq->waker_bfqq) {
+			    bfqd->last_completed_rq_bfqq != bfqq->waker_bfqq)
+			{
 				/*
 				 * First synchronization detected with
 				 * a candidate waker queue, or with a
@@ -2106,17 +2148,17 @@ static void bfq_add_request(struct request *rq)
 				 */
 				if (!hlist_unhashed(&bfqq->woken_list_node))
 					hlist_del_init(&bfqq->woken_list_node);
-				hlist_add_head(&bfqq->woken_list_node,
-				    &bfqd->last_completed_rq_bfqq->woken_list);
-
+				hlist_add_head(&bfqq->woken_list_node,&bfqd->last_completed_rq_bfqq->woken_list);
+                //清理bfq_bfqq_has_waker标记，bfqq->waker_bfqq这个bfqq就无效了
 				bfq_clear_bfqq_has_waker(bfqq);
-			} else if (bfqd->last_completed_rq_bfqq ==
-				   bfqq->waker_bfqq &&
-				   !bfq_bfqq_has_waker(bfqq)) {
+			}
+            else if (bfqd->last_completed_rq_bfqq == bfqq->waker_bfqq && !bfq_bfqq_has_waker(bfqq)) 
+            {
 				/*
 				 * synchronization with waker_bfqq
 				 * seen for the second time
 				 */
+				//标记bfq_bfqq_has_waker，bfqq->waker_bfqq这个bfqq才有效
 				bfq_mark_bfqq_has_waker(bfqq);
 			}
 		}
@@ -2127,8 +2169,11 @@ static void bfq_add_request(struct request *rq)
 		 * changes, see step (3) in the comments on
 		 * bfq_update_inject_limit().
 		 */
-		if (time_is_before_eq_jiffies(bfqq->decrease_time_jif +
-					     msecs_to_jiffies(1000)))
+		 
+		//执行到这里bfqq队列上没有IO请求,bfqq->sort_list链表是空的
+		
+		if (time_is_before_eq_jiffies(bfqq->decrease_time_jif + msecs_to_jiffies(1000)))//该if每1s成立一次
+		//bfqq->last_serv_time_ns = 0、bfqq->decrease_time_jif = jiffies、bfqd->waited_rq = NULL、bfqq->inject_limit被设置0或1
 			bfq_reset_inject_limit(bfqd, bfqq);
 
 		/*
@@ -2156,12 +2201,57 @@ static void bfq_add_request(struct request *rq)
 		 *   service time and updating the inject limit has
 		 *   elapsed.
 		 */
-		if (bfqq == bfqd->in_service_queue &&
+
+        /*bfq的inject原理是什么? 
+        1:bfqq绑定的进程有一种特性，就是派发完bfqq->sort_list上的IO请求，在最后一个IO请求传输完成
+          执行bfq_completed_request()函数时，bfqq可能很快就会来新的IO请求，于是bfqq不能立即过期失效。而是启动idle timer
+          定时器并设置bfq_bfqq_wait_request标记，等待一段时间等新的IO请求来，bfqd->in_service_queue进入idle状态。
+          这段时间bfqq一直bfqd->in_service_queue。
+          
+        2:新的IO请求来了，执行bfq_add_request()把它插入到bfqq->sort_list。此时bfqq->sort_list是NULL，执行
+          bfq_reset_inject_limit(bfqd, bfqq)重置bfqq->decrease_time_jif = jiffies，但是下边的
+          if (bfqq == bfqd->in_service_queue &&..........)不成立。
+          
+        3:bfqq再次派发完IO请求，执行步骤1的流程。然后，新的IO请求来了，执行bfq_add_request()把它插入到bfqq->sort_list，
+          此时bfqq->sort_list是NULL。执行到这里，下边的if (bfqq == bfqd->in_service_queue &&..........)大概率成立。
+          然后执行bfqd->last_empty_occupied_ns = ktime_get_ns()和bfqd->wait_dispatch = true，
+          后边派发该IO请求时还设置bfqd->waited_rq = rq。等该IO请求传输完成，bfq_finish_requeue_request()中执行
+          bfq_update_inject_limit()计算bfqq->last_serv_time_ns和bfqq->inject_limit，bfqq->last_serv_time_ns是在
+          bfqq->sort_list是NULL时向bfqq插入这个IO请求到传输完成的时间。bfqq->last_serv_time_ns越小bfqq->inject_limit就越大。
+          
+         4:bfqq上的IO请求再次派发完，但是因可能来新的IO请求而不能过期失效，启动idle timer并定时器并设置bfqq的
+           bfq_bfqq_wait_request的标记。此时bfqq依然还是bfqd->in_service_queue。然后再次派发IO请求，执行
+           __bfq_dispatch_request()->bfq_select_queue()，因为bfqq(即bfqd->in_service_queue)上没有IO请求，则执行到
+           if (bfq_bfqq_wait_request(bfqq) || (bfqq->dispatched != 0 && bfq_better_to_idle(bfqq)))成立，
+           然后就有很大可能执行到bfq_choose_bfqq_for_injection()，从st->active tree选一个有IO请求并且配额足够的bfqq。
+           基本上只要bfqd->rq_in_driver <= bfqd->in_service_queue的inject_limit,这个从st->active tree选中的
+           bfqq就大概率是inject bfqq。
+           
+         5:之后bfq_select_queue()返回的bfqq就是inject bfqq，然后派发该bfqq上的一个IO请求。注意，只是一个IO请求!下次
+           __bfq_dispatch_request()->bfq_select_queue()派发IO请求时，如果bfqd->in_service_queue这个bfqq还没有来新的IO请求，
+           那if (bfq_bfqq_wait_request(bfqq) || (bfqq->dispatched != 0 && bfq_better_to_idle(bfqq)))还成立，就可能再次执行
+           bfq_choose_bfqq_for_injection()选一个inject bfqq，派发该inject bfqq的一个IO请求。
+
+         总结:bfq的inject机制，我认为就是在bfqd->in_service_queue这个bfqq的IO请求派发完，但是可能很快来新的IO请求而不能过期
+              失效。但是在新的IO请求来的这段时间，如果不派发其他bfqq上的IO请求，就浪费IO带宽了。于是在派发IO请求时，
+              __bfq_dispatch_request()->bfq_select_queue()->bfq_choose_bfqq_for_injection()从st->active
+              tree选一个inject bfqq，派发这个inject bfqq上的一个IO请求。但选一个inject bfqq是有条件限制的:必须bfqd->in_service_queue
+              上的IO请求派发和传输的很快，这样bfq_finish_requeue_request()->bfq_update_inject_limit()中计算的
+              bfqq->last_serv_time_ns(bfqq是bfqd->in_service_queue)越小，bfqq->inject_limit就越大(bfqq是bfqd->in_service_queue)。
+              bfqq->inject_limit越大，则bfqq->inject_limit大于bfqd->rq_in_driver越容易成立，
+              这样才可以选一个inject bfqq暂时抢占bfqd->in_service_queue，派发一个inject bfqq上的IO请求。这样保证
+              bfqd->in_service_queue在idle状态时也可以派发IO请求，不浪费IO带宽。
+          */
+        
+		//执行到这里bfqq队列上没有IO请求,bfqq->sort_list链表是空的。并且bfqq是bfqd->in_service_queue下边的if才可能成立。
+
+		if (bfqq == bfqd->in_service_queue &&//bfqq必须是当前正在使用的bfqd->in_service_queue
 		    (bfqd->rq_in_driver == 0 ||
-		     (bfqq->last_serv_time_ns > 0 &&
-		      bfqd->rqs_injected && bfqd->rq_in_driver > 0)) &&
-		    time_is_before_eq_jiffies(bfqq->decrease_time_jif +
-					      msecs_to_jiffies(10))) {
+		    (bfqq->last_serv_time_ns > 0 && bfqd->rqs_injected && bfqd->rq_in_driver > 0)) &&
+		    //bfqq->decrease_time_jif被重置为jiffies后过了10ms
+		    time_is_before_eq_jiffies(bfqq->decrease_time_jif + msecs_to_jiffies(10))) 
+		{
+            //bfqd->last_empty_occupied_ns是bfqq->sort_list空时插入第一个IO请求时的时间
 			bfqd->last_empty_occupied_ns = ktime_get_ns();
 			/*
 			 * Start the state machine for measuring the
@@ -2169,6 +2259,19 @@ static void bfq_add_request(struct request *rq)
 			 * wait_dispatch will cause bfqd->waited_rq to
 			 * be set when rq will be dispatched.
 			 */
+			//执行到这里，bfqq是bfqd->in_service_queue，并且bfqq队列上没有IO请求,bfqq->sort_list链表是空的。然后向
+			//bfqq->sort_list插入本次的IO请求。
+			//执行bfqd->wait_dispatch = true设置bfqd->wait_dispatch为true，接着bfq_dispatch_rq_from_bfqq()派发
+			//该bfqq上的IO请求(这个IO请求大概率是刚才bfqq->sort_list空时插入的IO请求)，因为bfqd->wait_dispatch为
+			//true，则bfqd->waited_rq = rq。然后等IO请求传输完成执行到bfq_finish_requeue_request()函数里，
+			//if (rq == bfqd->waited_rq)成立，执行bfq_update_inject_limit(bfqd, bfqq)函数。该函数里执行
+			//tot_time_ns = ktime_get_ns() - bfqd->last_empty_occupied_ns，bfqd->last_empty_occupied_ns是bfqq->sort_list
+			//空时插入第一个IO请求的时间。tot_time_ns=ktime_get_ns() - bfqd->last_empty_occupied_ns计算的是
+			//该IO请求从插入bfqq->sort_list到该IO请求传输完成的时间。注意，第一个插入bfqq->sort_list的req并不能保证第一个派发，
+			//这里假设第一个插入bfqq->sort_list的req派发时也是第一个派发。继续，把tot_time_ns赋值给bfqq->last_serv_time_ns，
+			//bfqq->last_serv_time_ns可以理解成在bfqq->sort_list空，向bfqq上插入第一个IO请求到该IO请求传输完成的时间。
+			//IO请求传输完成时bfq_finish_requeue_request()->bfq_update_inject_limit()要根据bfqq->last_serv_time_ns计算
+			//bfqq->inject_limit。
 			bfqd->wait_dispatch = true;
 			/*
 			 * If there is no I/O in service in the drive,
@@ -4212,11 +4315,13 @@ void bfq_bfqq_expire(struct bfq_data *bfqd,
 		 * of all the outstanding requests to discover whether
 		 * the request pattern is actually isochronous.
 		 */
+		//bfqq有bfq_bfqq_softrt_update标记，并且bfqq上的IO请求都传输完了，并且bfqq的权重提升不是30倍或bfqq没有权重提升则更新bfqq->soft_rt_next_start
 		if (bfqq->dispatched == 0 &&
 		    bfqq->wr_coeff != bfqd->bfq_wr_coeff)
 			bfqq->soft_rt_next_start =
 				bfq_bfqq_softrt_next_start(bfqd, bfqq);
-		else if (bfqq->dispatched > 0) {//成立
+		else if (bfqq->dispatched > 0) {
+        //否则给给bfqq加上bfq_bfqq_softrt_update标记，将来IO传输完成执行bfq_completed_request()再计算bfqq->soft_rt_next_start
 			/*
 			 * Schedule an update of soft_rt_next_start to when
 			 * the task may be discovered to be isochronous.
@@ -4323,7 +4428,7 @@ static bool bfq_may_expire_for_budg_timeout(struct bfq_queue *bfqq)
 		&&
 		bfq_bfqq_budget_timeout(bfqq);//bfqq->budget_timeout 超时时间到
 }
-//bfqd没有一个bfqq的权重提升了并且当前的bfqq绑定的进程有大量连续快速传输IO的特性，该函数返回true
+//bfqd没有一个bfqq的权重提升了并且当前的bfqq绑定的进程有大量连续快速向bfqq->sort_list插入IO请求特性，该函数返回true
 static bool idling_boosts_thr_without_issues(struct bfq_data *bfqd,
 					     struct bfq_queue *bfqq)
 {
@@ -4438,7 +4543,7 @@ static bool idling_boosts_thr_without_issues(struct bfq_data *bfqd,
  */
  
 /*以下两个条件有一个成立则bfq_better_to_idle()返回true . 1:bfqd没有一个bfqq的权重提升了并且当前的bfqq绑定的进程有
-大量连续快速传输IO的特性  2:当前的bfqq权重提升了并且正在磁盘驱动层传输的IO请求比较多等等则返回true 。
+大量连续快速向bfqq队列插入IO请求的特性  2:当前的bfqq权重提升了并且正在磁盘驱动层传输的IO请求比较多等等则返回true 。
 简单说，当前的bfqq还不能过期失效，有较大概率bfqq绑定的进程很快还有IO要传输*/
 static bool bfq_better_to_idle(struct bfq_queue *bfqq)
 {
@@ -4508,10 +4613,13 @@ static bool bfq_bfqq_must_idle(struct bfq_queue *bfqq)
  * mechanism, and for the definitions of the quantities mentioned
  * below.
  */
+//从st->active tree上查找一个个bfqq，看该bfqq能否抢占bfqd->in_service_queue这个当前正在使用的bfqq。抢占条件是:
+//in_serv_bfqq->inject_limit越大，从st->active tree上查找到bfqq可以抢占bfqd->in_service_queue
 static struct bfq_queue *
 bfq_choose_bfqq_for_injection(struct bfq_data *bfqd)
 {
 	struct bfq_queue *bfqq, *in_serv_bfqq = bfqd->in_service_queue;
+    //limit初值是bfqd->in_service_queue这个bfqq的inject_limit
 	unsigned int limit = in_serv_bfqq->inject_limit;
 	/*
 	 * If
@@ -4525,9 +4633,17 @@ bfq_choose_bfqq_for_injection(struct bfq_data *bfqd)
 	 *   details on the computation of this number);
 	 * then injection can be performed without restrictions.
 	 */
+	//bfqd->in_service_queue 没有权重提升 并且没有bfq_bfqq_has_short_ttime属性，说明该bfqq可以被抢占
 	bool in_serv_always_inject = in_serv_bfqq->wr_coeff == 1 ||
 		!bfq_bfqq_has_short_ttime(in_serv_bfqq);
 
+    /*inject_limit(即limit = in_serv_bfqq->inject_limit)，是inject bfqq抢占bfqd->in_service_queue的阀值，
+      只有bfqd->rq_in_driver < inject_limit 才允许选一个inject bfqq抢占bfqd->in_service_queue，就是下边
+      if (bfqd->rq_in_driver < limit)里bfqd->rqs_injected = true和return bfqq的代码。即只有bfq总的已派发但还在
+      驱动层未传输完成的IO请求数(bfqd->rq_in_driver)小于inject_limit，才允许inject bfqq抢占bfqd->in_service_queue。
+      后续派发inject bfqq上的IO请求，避免了IO带宽的浪费。
+      如果inject_limit(即limit = in_serv_bfqq->inject_limit)是0，就不会允许inject bfqq抢占bfqd->in_service_queue。*/
+    
 	/*
 	 * If
 	 * - the baseline total service time could not be sampled yet,
@@ -4537,13 +4653,22 @@ bfq_choose_bfqq_for_injection(struct bfq_data *bfqd)
 	 *   significantly;
 	 * then temporarily raise inject limit to one request.
 	 */
+	//in_serv_bfqq->last_serv_time_ns是在bfqq->sort_list空时向bfqq上插入第一个IO请求 到 该IO请求传输完成的时间，现在
+	//in_serv_bfqq->last_serv_time_ns是0说明这个动作还没完成。bfq_bfqq_wait_request(in_serv_bfqq)说明in_serv_bfqq有
+	//bfq_bfqq_wait_request标记，说明in_serv_bfqq IO请求传输完了但是可能马上来新的IO请求，不能立即过期失效，则启动
+	//idle timer定时器。time_is_before_eq_jiffies(bfqd->last_idling_start_jiffies + bfqd->bfq_slice_idle)成立说明启动的
+	//idle tiemr定时器已经过了bfqd->bfq_slice_idle毫秒，bfqd->last_idling_start_jiffies是启动idle timer时的时间。
+	//这个if成立是说，即便bfqd->in_service_queue这个bfqq的inject_limit是0(即limit == 0)，本身不符合inject bfqq抢占
+	//bfqd->in_service_queue的条件，但是bfqq启动idle timer已经过了bfqd->bfq_slice_idle较长时间了，则令limit = 1。这样
+	//bfqd->rq_in_driver就有较大概率小于limit，就这样就符合inject bfqq抢占bfqd->in_service_queue条件了，后续派发
+	//inject bfqq上的IO请求，避免了IO带宽的浪费。
 	if (limit == 0 && in_serv_bfqq->last_serv_time_ns == 0 &&
 	    bfq_bfqq_wait_request(in_serv_bfqq) &&
-	    time_is_before_eq_jiffies(bfqd->last_idling_start_jiffies +
-				      bfqd->bfq_slice_idle)
-		)
+	    time_is_before_eq_jiffies(bfqd->last_idling_start_jiffies + bfqd->bfq_slice_idle)
+	    )
 		limit = 1;
 
+    //只有bfqd->rq_in_driver小于limit，才允许inject bfqq抢占bfqd->in_service_queue
 	if (bfqd->rq_in_driver >= limit)
 		return NULL;
 
@@ -4559,11 +4684,13 @@ bfq_choose_bfqq_for_injection(struct bfq_data *bfqd)
 	 *   (and re-added only if it gets new requests, but then it
 	 *   is assigned again enough budget for its new backlog).
 	 */
+	//遍历st->active tree上的bfqq
 	list_for_each_entry(bfqq, &bfqd->active_list, bfqq_list)
-		if (!RB_EMPTY_ROOT(&bfqq->sort_list) &&
-		    (in_serv_always_inject || bfqq->wr_coeff > 1) &&
-		    bfq_serv_to_charge(bfqq->next_rq, bfqq) <=
-		    bfq_bfqq_budget_left(bfqq)) {
+		if (!RB_EMPTY_ROOT(&bfqq->sort_list) &&//选中的bfqq队列上有IO请求派发
+		    (in_serv_always_inject || bfqq->wr_coeff > 1) &&//bfqd->in_service_queue可以被抢占，或者选中的bfqq权重提升了
+		    bfq_serv_to_charge(bfqq->next_rq, bfqq) <= bfq_bfqq_budget_left(bfqq))//选中的bfqq配额足够派发bfqq->next_rq
+		{
+            //到这里说明bfqq符合初步的抢占bfqd->in_service_queue的条件
 			/*
 			 * Allow for only one large in-flight request
 			 * on non-rotational devices, for the
@@ -4581,13 +4708,14 @@ bfq_choose_bfqq_for_injection(struct bfq_data *bfqd)
 			 * there is only one in-flight large request
 			 * at a time.
 			 */
+			//选中的bfqq用的是ssd并且bfqq->next_rq要派发的IO请求字节数大于64个扇区
 			if (blk_queue_nonrot(bfqd->queue) &&
-			    blk_rq_sectors(bfqq->next_rq) >=
-			    BFQQ_SECT_THR_NONROT)
+			    blk_rq_sectors(bfqq->next_rq) >= BFQQ_SECT_THR_NONROT)
 				limit = min_t(unsigned int, 1, limit);
 			else
 				limit = in_serv_bfqq->inject_limit;
-
+            
+            //limit越大，新选中的bfqq越容易抢占bfqd->in_service_queue
 			if (bfqd->rq_in_driver < limit) {
 				bfqd->rqs_injected = true;
 				return bfqq;
@@ -4688,8 +4816,17 @@ check_queue:
 	 * Yet, inject service from other queues if it boosts
 	 * throughput and is possible.
 	 */
+	 
+	//执行到这里说明bfqq=bfqd->in_service_queue上的IO请求都派发完了，但是bfqq如果有bfq_bfqq_wait_request标记，或者
+	//该bfqq上IO请求还没全传输完成(bfqq->dispatched != 0)，并且bfqq可能马上还有新的IO请求要来(bfq_better_to_idle(bfqq))
+	//说明该bfqq还不能过期失效。明明bfqd->in_service_queue上没有IO请求派发了，而又不能选择新的IO请求派发，这样就会损失IO吞吐量。
+	//于是就考虑从bfqq绑定的进程bfqq->bic->bfqq[0]中取出异步bfqq、或者从bfqq->waker_bfqq取出bfqq、
+	//或者取出inject bfqq，从以上3个条件之一取出一个bfqq，本次派发就这个新的bfqq上的IO请求。这样就可以保证在
+	//bfqd->in_service_queue上没有IO请求要派发了，但是bfqq又因为可能马上会来新的IO请求而不能过期失效，于是就从
+	//bfqq->bic->bfqq[0]、bfqq->waker_bfqq、inject bfqq 3个bfqq之中取出一个bfqq派发它上边的IO请求，保证不损失吞吐量
 	if (bfq_bfqq_wait_request(bfqq) ||
 	    (bfqq->dispatched != 0 && bfq_better_to_idle(bfqq))) {
+	    //从如果bfqq绑定的进程有异步bfqq，并且该异步bfqq处于st->active tree，则返回该进程的异步bfqq
 		struct bfq_queue *async_bfqq =
 			bfqq->bic && bfqq->bic->bfqq[0] &&
 			bfq_bfqq_busy(bfqq->bic->bfqq[0]) &&
@@ -4768,6 +4905,7 @@ check_queue:
 		 * may not be minimized, because the waker queue may
 		 * happen to be served only after other queues.
 		 */
+		//如果进程有异步bfqq，则取出这个异步bfqq
 		if (async_bfqq &&
 		    icq_to_bic(async_bfqq->next_rq->elv.icq) == bfqq->bic &&
 		    bfq_serv_to_charge(async_bfqq->next_rq, async_bfqq) <=
@@ -4780,10 +4918,13 @@ check_queue:
 					      bfqq->waker_bfqq) <=
 			   bfq_bfqq_budget_left(bfqq->waker_bfqq)
 			)
+			//取出bfqq->waker_bfqq
 			bfqq = bfqq->waker_bfqq;
-		else if (!idling_boosts_thr_without_issues(bfqd, bfqq) &&
-			 (bfqq->wr_coeff == 1 || bfqd->wr_busy_queues > 1 ||
-			  !bfq_bfqq_has_short_ttime(bfqq)))
+		else if (!idling_boosts_thr_without_issues(bfqd, bfqq) &&//bfqd->in_service_queue这个bfqq绑定的进程空闲时没有大量连续快速向bfqq->sort_list插入IO请求特性
+			 (bfqq->wr_coeff == 1 || bfqd->wr_busy_queues > 1 ||//bfqd->in_service_queue这个bfqq没有权重提升
+			  !bfq_bfqq_has_short_ttime(bfqq)))//bfqd->in_service_queue这个bfqq绑定的进程在派发IO请求时，没有快速插入IO请求的特性
+			//该if成立说明bfqd->in_service_queue这个bfqq初步符合被inject bfqq抢占的条件，在bfq_choose_bfqq_for_injection()里，
+			//如果遍历st->active tree上的bfqq，符合bfqd->rq_in_driver < limit条件，就返回这个bfqq，抢占bfqd->in_service_queue
 			bfqq = bfq_choose_bfqq_for_injection(bfqd);
 		else
 			bfqq = NULL;
@@ -6048,11 +6189,12 @@ static void bfq_completed_request(struct bfq_queue *bfqq, struct bfq_data *bfqd)
 	 * an explanation). We schedule this delayed update when bfqq
 	 * expires, if it still has in-flight requests.
 	 */
+	//bfqq有bfq_bfqq_softrt_update标记，并且bfqq上的IO请求都传输完了，并且bfqq的权重提升不是30倍或bfqq没有权重提升
 	if (bfq_bfqq_softrt_update(bfqq) && bfqq->dispatched == 0 &&
 	    RB_EMPTY_ROOT(&bfqq->sort_list) &&
 	    bfqq->wr_coeff != bfqd->bfq_wr_coeff)
-		bfqq->soft_rt_next_start =
-			bfq_bfqq_softrt_next_start(bfqd, bfqq);
+	    //则计算实时性IO的bfqq下一次插入IO请求的时间
+		bfqq->soft_rt_next_start = bfq_bfqq_softrt_next_start(bfqd, bfqq);
 
 	/*
 	 * If this is the in-service queue, check if it needs to be expired,
@@ -6223,20 +6365,31 @@ static void bfq_finish_requeue_request_body(struct bfq_queue *bfqq)
  * bfq_choose_bfqq_for_injection(). These comments also explain some
  * exceptions, made by the injection mechanism in some special cases.
  */
+//IO请求传输完成bfq_finish_requeue_request()里调用bfq_update_inject_limit()。
+
+//计算bfqq队列空时，向bfqq队列插入第一个IO请求到该IO请求传输完成的时间tot_time_ns，然后赋予bfqq->last_serv_time_ns。
+//还会根据tot_time_ns和上一次的bfqq->last_serv_time_ns，更新bfqq->inject_limit。tot_time_ns越大则bfqq->inject_limit减1，否则
+//tot_time_ns越小则bfqq->inject_limit加1
 static void bfq_update_inject_limit(struct bfq_data *bfqd,
 				    struct bfq_queue *bfqq)
 {
+    //bfqd->last_empty_occupied_ns是bfqq->sort_list空时插入第一个IO请求的时间，现在该IO请求传输完成了，
+    //tot_time_ns可以理解成bfqq队列空时，向bfqq队列插入第一个IO请求到该IO请求传输完成的时间。注意，第一个插入bfqq->sort_list
+    //的req并不能保证第一个派发，这里假设第一个插入bfqq->sort_list的req派发时也是第一个派发。
 	u64 tot_time_ns = ktime_get_ns() - bfqd->last_empty_occupied_ns;
 	unsigned int old_limit = bfqq->inject_limit;
 
-	if (bfqq->last_serv_time_ns > 0 && bfqd->rqs_injected) {
+    //这里对bfqq->inject_limit加加减减，必须bfqd->rqs_injected为true(表示之前已经在bfq_choose_bfqq_for_injection()选中了inject bfqq)
+    //并且必须bfqq->last_serv_time_ns大于0，即已经有了一轮 向bfqq->sort_list空时插入第一个IO请求并且该IO请求传输完成。
+    if (bfqq->last_serv_time_ns > 0 && bfqd->rqs_injected) {
+        //阀值是bfqq->last_serv_time_ns是的1.5倍
 		u64 threshold = (bfqq->last_serv_time_ns * 3)>>1;
-
+        //bfqq->inject_limit在tot_time_ns很大时减1
 		if (tot_time_ns >= threshold && old_limit > 0) {
 			bfqq->inject_limit--;
 			bfqq->decrease_time_jif = jiffies;
-		} else if (tot_time_ns < threshold &&
-			   old_limit <= bfqd->max_rq_in_driver)
+        //bfqq->inject_limit在tot_time_ns很小时加1
+		} else if (tot_time_ns < threshold && old_limit <= bfqd->max_rq_in_driver)
 			bfqq->inject_limit++;
 	}
 
@@ -6252,8 +6405,8 @@ static void bfq_update_inject_limit(struct bfq_data *bfqd,
 	 * in particular, this function is executed before
 	 * bfqd->rq_in_driver is decremented in such a code path.
 	 */
-	if ((bfqq->last_serv_time_ns == 0 && bfqd->rq_in_driver == 1) ||
-	    tot_time_ns < bfqq->last_serv_time_ns) {
+	//bfqq->last_serv_time_ns上一次
+	if ((bfqq->last_serv_time_ns == 0 && bfqd->rq_in_driver == 1) ||tot_time_ns < bfqq->last_serv_time_ns) {
 		if (bfqq->last_serv_time_ns == 0) {
 			/*
 			 * Now we certainly have a base value: make sure we
@@ -6261,8 +6414,12 @@ static void bfq_update_inject_limit(struct bfq_data *bfqd,
 			 */
 			bfqq->inject_limit = max_t(unsigned int, 1, old_limit);
 		}
+        //bfqq->last_serv_time_ns保存bfqq队列空时IO请求插入bfqq的队列到该IO请求传输完成的时间
 		bfqq->last_serv_time_ns = tot_time_ns;
-	} else if (!bfqd->rqs_injected && bfqd->rq_in_driver == 1)
+	} 
+    //只要bfq的IO请求全传输完了，bfqd->rq_in_driver是1，稍后减1，到这个else分支很容易成立。
+    //bfqd->rqs_injected大部分时间是falase，只有设置了inject bfqq时才会设置true。
+    else if (!bfqd->rqs_injected && bfqd->rq_in_driver == 1)
 		/*
 		 * No I/O injected and no request still in service in
 		 * the drive: these are the exact conditions for
@@ -6272,6 +6429,7 @@ static void bfq_update_inject_limit(struct bfq_data *bfqd,
 		 * or the spatial locality of the I/O requests in bfqq
 		 * change.
 		 */
+	    //bfqq->last_serv_time_ns保存bfqq队列空时IO请求插入bfqq的队列到该IO请求传输完成的时间
 		bfqq->last_serv_time_ns = tot_time_ns;
 
 

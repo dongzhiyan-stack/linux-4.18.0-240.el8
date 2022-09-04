@@ -287,11 +287,18 @@ struct bfq_queue {
 	unsigned short new_ioprio, new_ioprio_class;
 
 	/* last total-service-time sample, see bfq_update_inject_limit() */
+    //在bfqq->sort_list空时向bfqq上插入第一个IO请求 到 该IO请求传输完成的时间。注意，第一个插入bfqq->sort_list的req并不能保证
+    //第一个派发，这里假设第一个插入bfqq->sort_list的req派发时也是第一个派发。bfq_add_request()有详细注释
+    //向bfqq队列插入IO请求bfq_add_request->bfq_reset_inject_limit()中每1s被设置一次0，bfq_update_inject_limit()中更新
 	u64 last_serv_time_ns;
 	/* limit for request injection */
+    //向bfqq队列插入IO请求bfq_add_request->bfq_reset_inject_limit()中每1s设置inject_limit 0或者1。inject_limit是inject bfqq抢占bfqd->in_service_queue的阀值
+    //在bfq_choose_bfqq_for_injection()体现的比较明显:只有bfqd->rq_in_driver < inject_limit 才允许选一个inject bfqq抢占bfqd->in_service_queue，
+    //即只有bfq总的已派发但还在驱动层未传输完成的IO请求数(bfqd->rq_in_driver)小于inject_limit，才允许inject bfqq抢占bfqd->in_service_queue，
 	unsigned int inject_limit;
 	/* last time the inject limit has been decreased, in jiffies */
-	unsigned long decrease_time_jif;
+    //向bfqq队列插入IO请求bfq_add_request->bfq_reset_inject_limit()中每1s被设置一次jiffies
+	unsigned long decrease_time_jif;//一轮更新inject_limit的系统时间
 
 	/*
 	 * Shared bfq_queue if queue is cooperating with one or more
@@ -385,7 +392,9 @@ struct bfq_queue {
 	 * queue it is deemed as soft real-time (see the comments on
 	 * the function bfq_bfqq_softrt_next_start())
 	 */
-	unsigned long soft_rt_next_start;//bfq_bfqq_expire()更新
+	//计算实时性IO的bfqq下一次插入IO请求的时间
+	//bfq_init_bfqq()中赋值为jiffies，bfq_completed_request()和bfq_bfqq_expire()中更新，bfq_bfqq_handle_idle_busy_switch()中使用
+	unsigned long soft_rt_next_start;
 	/*
 	 * Start time of the current weight-raising period if
 	 * the @bfq-queue is being weight-raised, otherwise
@@ -466,6 +475,7 @@ struct bfq_io_cq {
 	struct io_cq icq; /* must be the first member */
 	/* array of two process queues, the sync and the async */
     //bfq_get_bfqq_handle_split->bic_set_bfqq()函数中bic->bfqq[is_sync] = bfqq，即新分配的bfqq是保存到bic->bfqq[]里的
+    //struct bfq_queue *bfqq[2]数组有两个bfqq，一个sync一个async
 	struct bfq_queue *bfqq[2];
 	/* per (request_queue, blkcg) ioprio */
 	int ioprio;
@@ -647,6 +657,7 @@ struct bfq_data {
 	struct bfq_queue *last_completed_rq_bfqq;
 
 	/* time of last transition from empty to non-empty (ns) */
+    //向bfqq队列插入IO请求bfq_add_request()设置为当前时间
 	u64 last_empty_occupied_ns;
 
 	/*
@@ -655,15 +666,19 @@ struct bfq_data {
 	 * bfq_update_inject_limit()). This will cause the setting of
 	 * waited_rq when the request is finally dispatched.
 	 */
+	//向bfqq队列插入IO请求bfq_add_request()中设置wait_dispatch=true
 	bool wait_dispatch;
 	/*
 	 *  If set, then bfq_update_inject_limit() is invoked when
 	 *  waited_rq is eventually completed.
 	 */
+	//向bfqq队列插入IO请求bfq_add_request->bfq_reset_inject_limit()中每1s被设置NULL
 	struct request *waited_rq;//bfq_dispatch_rq_from_bfqq()赋值为派发的req
 	/*
 	 * True if some request has been injected during the last service hole.
 	 */
+	//bfq_update_inject_limit()和bfq_reset_inject_limit()设置为false。在bfq_choose_bfqq_for_injection()中，rqs_injected被设置为true
+	//rqs_injected为true表示开始使用inject bfqq抢占了bfqd->in_service_queue，之后开始派发inject bfqq上的一个IO请求，注意只是一个IO请求。
 	bool rqs_injected;
 
 	/* time of first rq dispatch in current observation interval (ns) */
