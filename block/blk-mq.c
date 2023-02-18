@@ -712,7 +712,7 @@ void blk_mq_start_request(struct request *rq)
 #endif
 }
 EXPORT_SYMBOL(blk_mq_start_request);
-
+//IO遇到驱动繁忙派发失败，执行__blk_mq_issue_directly(),释放tag
 static void __blk_mq_requeue_request(struct request *rq)
 {
 	struct request_queue *q = rq->q;
@@ -1182,6 +1182,7 @@ static void blk_mq_update_dispatch_busy(struct blk_mq_hw_ctx *hctx, bool busy)
 /*
  * Returns true if we did some work AND can potentially do more.
  */
+//取出list链表上的req派发给磁盘驱动，如果因驱动队列繁忙或者nvme硬件繁忙导致派发失败，则把req添加hctx->dispatch等稍后派发
 bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 			     bool got_budget)
 {
@@ -1212,7 +1213,7 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 			no_budget_avail = true;
 			break;
 		}
-
+        //如果rq没有分配tag则先分配一个tag
 		if (!blk_mq_get_driver_tag(rq)) {
 			/*
 			 * The initial allocation attempt failed, so we need to
@@ -1247,30 +1248,37 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 			nxt = list_first_entry(list, struct request, queuelist);
 			bd.last = !blk_mq_get_driver_tag(nxt);
 		}
-
-		ret = q->mq_ops->queue_rq(hctx, &bd);
+        //把req派发该驱动
+		ret = q->mq_ops->queue_rq(hctx, &bd);//scsi_queue_rq
+        //这个if成立应该说明是 驱动队列繁忙 或者nvme硬件繁忙，不能再向驱动派发IO，因此本次的req派发失败
 		if (ret == BLK_STS_RESOURCE || ret == BLK_STS_DEV_RESOURCE) {
 			/*
 			 * If an I/O scheduler has been configured and we got a
 			 * driver tag for the next request already, free it
 			 * again.
 			 */
+			
 			if (!list_empty(list)) {
+                //把req在list链表上的下一个req的tag释放了，搞不清楚为什么
 				nxt = list_first_entry(list, struct request, queuelist);
 				blk_mq_put_driver_tag(nxt);
 			}
+            //把派发失败的req再添加到list链表
 			list_add(&rq->queuelist, list);
 			__blk_mq_requeue_request(rq);
 			break;
 		}
 
 		if (unlikely(ret != BLK_STS_OK)) {
+            //req派发失败则errors加1
 			errors++;
 			blk_mq_end_request(rq, BLK_STS_IOERR);
 			continue;
 		}
-
+        //派发req失败则queued加1
 		queued++;
+        
+    //一直派发list链表上的req直到list链表空
 	} while (!list_empty(list));
 
 	hctx->dispatched[queued_to_index(queued)]++;
@@ -1279,6 +1287,7 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 	 * Any items that need requeuing? Stuff them into hctx->dispatch,
 	 * that is where we will continue on next queue run.
 	 */
+	//如果list链表上还有req，说明派发req时遇到驱动队列或者硬件繁忙，req没有派发成功
 	if (!list_empty(list)) {
 		bool needs_restart;
 
@@ -1291,6 +1300,7 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 			q->mq_ops->commit_rqs(hctx);
 
 		spin_lock(&hctx->lock);
+        //list上没有派发成功的req添加到hctx->dispatch链表，稍后延迟派发
 		list_splice_tail_init(list, &hctx->dispatch);
 		spin_unlock(&hctx->lock);
 
@@ -1331,9 +1341,11 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 		needs_restart = blk_mq_sched_needs_restart(hctx);
 		if (!needs_restart ||
 		    (no_tag && list_empty_careful(&hctx->dispatch_wait.entry)))
+		    //再次直接启动派发IO
 			blk_mq_run_hw_queue(hctx, true);
 		else if (needs_restart && (ret == BLK_STS_RESOURCE ||
 					   no_budget_avail))
+		    //启动异步线程派发IO
 			blk_mq_delay_run_hw_queue(hctx, BLK_MQ_RESOURCE_DELAY);
 
 		blk_mq_update_dispatch_busy(hctx, true);
@@ -1389,6 +1401,7 @@ static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	might_sleep_if(hctx->flags & BLK_MQ_F_BLOCKING);
 
 	hctx_lock(hctx, &srcu_idx);
+    //派发IO
 	blk_mq_sched_dispatch_requests(hctx);
 	hctx_unlock(hctx, srcu_idx);
 }
@@ -1457,7 +1470,7 @@ static void __blk_mq_delay_run_hw_queue(struct blk_mq_hw_ctx *hctx, bool async,
 	if (!async && !(hctx->flags & BLK_MQ_F_BLOCKING)) {
 		int cpu = get_cpu();
 		if (cpumask_test_cpu(cpu, hctx->cpumask)) {
-			__blk_mq_run_hw_queue(hctx);
+			__blk_mq_run_hw_queue(hctx);//派发IO
 			put_cpu();
 			return;
 		}
@@ -1494,7 +1507,7 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx, bool async)
 	hctx_unlock(hctx, srcu_idx);
 
 	if (need_run)
-		__blk_mq_delay_run_hw_queue(hctx, async, 0);
+		__blk_mq_delay_run_hw_queue(hctx, async, 0);//派发IO
 }
 EXPORT_SYMBOL(blk_mq_run_hw_queue);
 
@@ -1886,8 +1899,10 @@ static void blk_mq_try_issue_directly(struct blk_mq_hw_ctx *hctx,
 
 	ret = __blk_mq_try_issue_directly(hctx, rq, cookie, false, true);
 	if (ret == BLK_STS_RESOURCE || ret == BLK_STS_DEV_RESOURCE)
+        //__blk_mq_try_issue_directly()直接派发IO但是驱动繁忙，这里把req插入hctx->dispatch链表
 		blk_mq_request_bypass_insert(rq, false, true);
 	else if (ret != BLK_STS_OK)
+        //派发IO失败，释放req，但是会 blk_account_io_done
 		blk_mq_end_request(rq, ret);
 
 	hctx_unlock(hctx, srcu_idx);

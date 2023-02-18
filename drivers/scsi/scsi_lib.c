@@ -1692,7 +1692,7 @@ static blk_status_t scsi_queue_rq(struct blk_mq_hw_ctx *hctx,
 	if (sdev->simple_tags)
 		cmd->flags |= SCMD_TAGGED;
 	if (bd->last)
-		cmd->flags |= SCMD_LAST;
+		cmd->flags |= SCMD_LAST;//最后一个io标记位
 
 	scsi_init_cmd_errh(cmd);
 	cmd->scsi_done = scsi_mq_done;

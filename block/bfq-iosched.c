@@ -5095,7 +5095,7 @@ static struct request *bfq_dispatch_rq_from_bfqq(struct bfq_data *bfqd,
 return_rq:
 	return rq;
 }
-
+//返回0则blk_mq_do_dispatch_sched()中就无法派发继续派发IO了
 static bool bfq_has_work(struct blk_mq_hw_ctx *hctx)
 {
 	struct bfq_data *bfqd = hctx->queue->elevator->elevator_data;
@@ -5104,8 +5104,8 @@ static bool bfq_has_work(struct blk_mq_hw_ctx *hctx)
 	 * Avoiding lock: a race on bfqd->busy_queues should cause at
 	 * most a call to dispatch for nothing
 	 */
-	return !list_empty_careful(&bfqd->dispatch) ||
-		bfq_tot_busy_queues(bfqd) > 0;
+	return !list_empty_careful(&bfqd->dispatch) ||//list_empty_careful(&bfqd->dispatch)返回NULL，说明该链表上有rq派发，返回1
+		bfq_tot_busy_queues(bfqd) > 0;//bfq_tot_busy_queues(bfqd)大于0说明还有active bfqq，则派发该bfqq上的rq，此时返回1
 }
 
 static struct request *__bfq_dispatch_request(struct blk_mq_hw_ctx *hctx)
@@ -5114,7 +5114,7 @@ static struct request *__bfq_dispatch_request(struct blk_mq_hw_ctx *hctx)
 	struct request *rq = NULL;
 	struct bfq_queue *bfqq = NULL;
 
-	if (!list_empty(&bfqd->dispatch)) {//测试时bfqd->dispatch链表非空，if不成立
+	if (!list_empty(&bfqd->dispatch)) {//bfqd->dispatch链表偶尔会有IO请求，大部分情况该if不成立
 		rq = list_first_entry(&bfqd->dispatch, struct request,
 				      queuelist);
 		list_del_init(&rq->queuelist);
@@ -6020,7 +6020,8 @@ static void bfq_insert_request(struct blk_mq_hw_ctx *hctx, struct request *rq,
     //先查找rq->elv.priv[1]中是否有bfqq,有的话直接从取出返回。再尝试通过bic->bfqq[is_sync]得到bfqq，失败则针对异步或者同步IO分配新的bfqq并初始化
     //这里边有 rq->elv.priv[1] = bfqq
     bfqq = bfq_init_rq(rq);
-	if (!bfqq || at_head || blk_rq_is_passthrough(rq)) {//这个if测试不成立
+    //这个if测试不成立，但blk_mq_make_request()向IO队列插入IO请求时传入的at_head可能是true，此时就会把rq添加到bfqd->dispatch
+	if (!bfqq || at_head || blk_rq_is_passthrough(rq)) {
 		if (at_head)
 			list_add(&rq->queuelist, &bfqd->dispatch);
 		else

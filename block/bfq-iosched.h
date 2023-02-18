@@ -413,7 +413,7 @@ struct bfq_queue {
 	/* factor by which the weight of this queue is multiplied */
     //bfq_dispatch_rq_from_bfqq->bfq_update_wr_data-> bfq_bfqq_end_wr中更新为1
     //bfq_dispatch_rq_from_bfqq->bfq_update_wr_data->switch_back_to_interactive_wr中更新为bfqd->bfq_wr_coeff
-	unsigned int wr_coeff;//bfq_init_bfqq()初值是1，bfq_update_bfqq_wr_on_rq_arrival()赋值为bfqd->bfq_wr_coeff即30
+	unsigned int wr_coeff;//bfq_init_bfqq()初值是1，bfq_update_bfqq_wr_on_rq_arrival()赋值为bfqd->bfq_wr_coeff即30或者更大
 	/*
 	 * Time of the last transition of the @bfq_queue from idle to
 	 * backlogged.
@@ -534,6 +534,7 @@ struct bfq_data {
 	/* device request queue */
 	struct request_queue *queue;
 	/* dispatch queue */
+    //有概率向该链表添加rq，blk_mq_make_request()向IO队列插入IO请求时传入的at_head可能是true，此时就会把rq添加到bfqd->dispatch
 	struct list_head dispatch;
 
 	/* root bfq_group for the device */
@@ -852,17 +853,17 @@ struct bfq_data {
 };
 
 enum bfqq_state_flags {
-	BFQQF_just_created = 0,	/* queue just allocated */
-	BFQQF_busy,		/* has requests or is in service */
-	BFQQF_wait_request,	/* waiting for a request */
-	BFQQF_non_blocking_wait_rq, /*
+	BFQQF_just_created = 0,	/*0 queue just allocated */
+	BFQQF_busy,		/*1 has requests or is in service */
+	BFQQF_wait_request,	/*2 waiting for a request */
+	BFQQF_non_blocking_wait_rq, /*3
 				     * waiting for a request
 				     * without idling the device
 				     */
-	BFQQF_fifo_expire,	/* FIFO checked in this slice */
-	BFQQF_has_short_ttime,	/* queue has a short think time */
+	BFQQF_fifo_expire,	/*4 FIFO checked in this slice */
+	BFQQF_has_short_ttime,	/*5 queue has a short think time */
 	BFQQF_sync,		/* synchronous queue */
-	BFQQF_IO_bound,		/*
+	BFQQF_IO_bound,		/*6
 				 * bfqq has timed-out at least once
 				 * having consumed at most 2/10 of
 				 * its budget
@@ -957,6 +958,7 @@ struct bfqg_stats {
  * @ps: @blkcg_policy_storage that this structure inherits
  * @weight: weight of the bfq_group
  */
+//bfq_cpd_alloc()里分配struct bfq_group_data，struct bfq_group_data结构体包含blkcg_policy_data
 struct bfq_group_data {
 	/* must be the first member */
 	struct blkcg_policy_data pd;

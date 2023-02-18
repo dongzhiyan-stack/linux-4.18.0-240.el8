@@ -300,6 +300,7 @@ enum {
 
 	BLK_MQ_S_STOPPED	= 0,
 	BLK_MQ_S_TAG_ACTIVE	= 1,
+	//__blk_mq_sched_dispatch_requests->blk_mq_sched_mark_restart_hctx 派发hctx->dispatch上的IO时设置 BLK_MQ_S_SCHED_RESTART
 	BLK_MQ_S_SCHED_RESTART	= 2,
 
 	/* hw queue is inactive after all its CPUs become offline */

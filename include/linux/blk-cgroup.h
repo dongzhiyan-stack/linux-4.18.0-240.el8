@@ -102,6 +102,7 @@ struct blkg_policy_data {
  * data structure which embeds blkcg_policy_data at the beginning.
  * cpd_init() is invoked to let each policy handle per-blkcg data.
  */
+//bfq_cpd_alloc()里分配struct bfq_group_data，struct bfq_group_data结构体包含blkcg_policy_data
 struct blkcg_policy_data {
 	/* the blkcg and policy id this per-policy data belongs to */
 	struct blkcg			*blkcg;

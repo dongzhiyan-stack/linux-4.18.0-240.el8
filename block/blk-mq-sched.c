@@ -102,6 +102,8 @@ void blk_mq_sched_restart(struct blk_mq_hw_ctx *hctx)
  * Returns -EAGAIN if hctx->dispatch was found non-empty and run_work has to
  * be run again.  This is necessary to avoid starving flushes.
  */
+//循环从IO调度器队列取出IO请求存入rq_list链表，然后取出rq_list链表上的req派发给磁盘驱动，如果因驱动队列繁忙或者nvme硬件繁忙
+//导致派发失败，则把req添加hctx->dispatch等稍后派发，此时退出循环。如果IO调度器队列IO派发完了，也会退出while循环
 static int blk_mq_do_dispatch_sched(struct blk_mq_hw_ctx *hctx)
 {
 	struct request_queue *q = hctx->queue;
@@ -123,7 +125,7 @@ static int blk_mq_do_dispatch_sched(struct blk_mq_hw_ctx *hctx)
 		if (!blk_mq_get_dispatch_budget(hctx))
 			break;
 
-		rq = e->type->ops.dispatch_request(hctx);
+		rq = e->type->ops.dispatch_request(hctx);//调用调度器函数，派发IO   bfq_dispatch_request
 		if (!rq) {
 			blk_mq_put_dispatch_budget(hctx);
 			/*
@@ -143,6 +145,8 @@ static int blk_mq_do_dispatch_sched(struct blk_mq_hw_ctx *hctx)
 		 * in blk_mq_dispatch_rq_list().
 		 */
 		list_add(&rq->queuelist, &rq_list);
+    //取出rq_list链表上的req派发给磁盘驱动，如果因驱动队列繁忙或者nvme硬件繁忙导致派发失败，则把req添加hctx->dispatch等稍后派发
+    //遇到req派发失败返回false，退出while循环
 	} while (blk_mq_dispatch_rq_list(q, &rq_list, true));
 
 	return ret;
@@ -230,6 +234,7 @@ int __blk_mq_sched_dispatch_requests(struct blk_mq_hw_ctx *hctx)
 	 * If we have previous entries on our dispatch list, grab them first for
 	 * more fair dispatch.
 	 */
+	//如果hctx->dispatch链表上有req，则优先派发hctx->dispatch上的req，这些req是上次派发遇到磁盘驱动繁忙等导致派发失败的req
 	if (!list_empty_careful(&hctx->dispatch)) {
 		spin_lock(&hctx->lock);
 		if (!list_empty(&hctx->dispatch))
@@ -251,8 +256,12 @@ int __blk_mq_sched_dispatch_requests(struct blk_mq_hw_ctx *hctx)
 	 * dispatch list.
 	 */
 	if (!list_empty(&rq_list)) {
+        //设置hctx->state的BLK_MQ_S_SCHED_RESTART标记
 		blk_mq_sched_mark_restart_hctx(hctx);
+        //优先派发hctx->dispatch上的req，如果没有遇到磁盘驱动繁忙等，返回true，此时继续执行下边的blk_mq_do_dispatch_sched派发IO调度队列上的IO请求
 		if (blk_mq_dispatch_rq_list(q, &rq_list, false)) {
+            //循环从IO调度器队列取出IO请求存入rq_list链表，然后取出rq_list链表上的req派发给磁盘驱动，如果因驱动队列繁忙
+            //或者nvme硬件繁忙导致派发失败，则把req添加hctx->dispatch等稍后派发，此时退出循环。如果IO调度器队列IO派发完了，也会退出while循环
 			if (has_sched_dispatch)
 				ret = blk_mq_do_dispatch_sched(hctx);
 			else
@@ -270,7 +279,7 @@ int __blk_mq_sched_dispatch_requests(struct blk_mq_hw_ctx *hctx)
 
 	return ret;
 }
-
+//派发IO
 void blk_mq_sched_dispatch_requests(struct blk_mq_hw_ctx *hctx)
 {
 	struct request_queue *q = hctx->queue;
@@ -285,6 +294,7 @@ void blk_mq_sched_dispatch_requests(struct blk_mq_hw_ctx *hctx)
 	 * A return of -EAGAIN is an indication that hctx->dispatch is not
 	 * empty and we must run again in order to avoid starving flushes.
 	 */
+	//派发IO
 	if (__blk_mq_sched_dispatch_requests(hctx) == -EAGAIN) {
 		if (__blk_mq_sched_dispatch_requests(hctx) == -EAGAIN)
 			blk_mq_run_hw_queue(hctx, true);

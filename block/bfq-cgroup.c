@@ -24,7 +24,7 @@
 
 #include "bfq-iosched.h"
 
-#ifdef CONFIG_BFQ_CGROUP_DEBUG
+#ifdef CONFIG_BFQ_CGROUP_DEBUG//no
 static int bfq_stat_init(struct bfq_stat *stat, gfp_t gfp)
 {
 	int ret;
@@ -264,7 +264,7 @@ void bfqg_stats_update_completion(struct bfq_group *bfqg, u64 start_time_ns,
 #else /* CONFIG_BFQ_CGROUP_DEBUG */
 
 void bfqg_stats_update_io_add(struct bfq_group *bfqg, struct bfq_queue *bfqq,
-			      unsigned int op) { }
+			      unsigned int op) { }//yes
 void bfqg_stats_update_io_remove(struct bfq_group *bfqg, unsigned int op) { }
 void bfqg_stats_update_io_merged(struct bfq_group *bfqg, unsigned int op) { }
 void bfqg_stats_update_completion(struct bfq_group *bfqg, u64 start_time_ns,
@@ -486,7 +486,7 @@ static struct bfq_group_data *blkcg_to_bfqgd(struct blkcg *blkcg)
 {
 	return cpd_to_bfqgd(blkcg_to_cpd(blkcg, &blkcg_policy_bfq));
 }
-
+//分配bfq_group_data(即bgd)并返回它的成员blkcg_policy_data(即pd)
 static struct blkcg_policy_data *bfq_cpd_alloc(gfp_t gfp)
 {
 	struct bfq_group_data *bgd;
@@ -496,7 +496,7 @@ static struct blkcg_policy_data *bfq_cpd_alloc(gfp_t gfp)
 		return NULL;
 	return &bgd->pd;
 }
-
+//由blkcg_policy_data(pd)得到bfq_group_data，然后把默认权重赋值给bfq_group_data的成员weight
 static void bfq_cpd_init(struct blkcg_policy_data *cpd)
 {
 	struct bfq_group_data *d = cpd_to_bfqgd(cpd);
@@ -509,12 +509,12 @@ static void bfq_cpd_free(struct blkcg_policy_data *cpd)
 {
 	kfree(cpd_to_bfqgd(cpd));
 }
-
+//分配bfq_group(即bfqg)并返回它的成员struct blkg_policy_data pd
 static struct blkg_policy_data *bfq_pd_alloc(gfp_t gfp, struct request_queue *q,
 					     struct blkcg *blkcg)
 {
 	struct bfq_group *bfqg;
-
+    //分配bfq_group(即bfqg)
 	bfqg = kzalloc_node(sizeof(*bfqg), gfp, q->node);
 	if (!bfqg)
 		return NULL;

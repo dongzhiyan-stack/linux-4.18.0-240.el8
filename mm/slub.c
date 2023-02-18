@@ -2665,7 +2665,7 @@ static __always_inline void *slab_alloc_node(struct kmem_cache *s,
 	struct kmem_cache_cpu *c;
 	struct page *page;
 	unsigned long tid;
-
+    //这里可能休眠
 	s = slab_pre_alloc_hook(s, gfpflags);
 	if (!s)
 		return NULL;

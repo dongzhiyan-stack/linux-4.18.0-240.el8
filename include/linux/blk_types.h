@@ -29,7 +29,7 @@ typedef u32 __bitwise blk_status_t;
 #else
 typedef u8 __bitwise blk_status_t;
 #endif
-#define	BLK_STS_OK 0
+#define	BLK_STS_OK 0//派发IO成功
 #define BLK_STS_NOTSUPP		((__force blk_status_t)1)
 #define BLK_STS_TIMEOUT		((__force blk_status_t)2)
 #define BLK_STS_NOSPC		((__force blk_status_t)3)
@@ -38,7 +38,7 @@ typedef u8 __bitwise blk_status_t;
 #define BLK_STS_NEXUS		((__force blk_status_t)6)
 #define BLK_STS_MEDIUM		((__force blk_status_t)7)
 #define BLK_STS_PROTECTION	((__force blk_status_t)8)
-#define BLK_STS_RESOURCE	((__force blk_status_t)9)
+#define BLK_STS_RESOURCE	((__force blk_status_t)9)//驱动队列繁忙
 #define BLK_STS_IOERR		((__force blk_status_t)10)
 
 /* hack for device mapper, don't use elsewhere: */
@@ -62,7 +62,7 @@ typedef u8 __bitwise blk_status_t;
  * flight. Examples of that are kernel memory allocations, DMA mappings, or
  * any other system wide resources.
  */
-#define BLK_STS_DEV_RESOURCE	((__force blk_status_t)13)
+#define BLK_STS_DEV_RESOURCE	((__force blk_status_t)13)//驱动硬件繁忙
 
 /**
  * blk_path_error - returns true if error may be path related
