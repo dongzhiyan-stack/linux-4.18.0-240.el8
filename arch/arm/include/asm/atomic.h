@@ -201,7 +201,7 @@ static inline int atomic_fetch_##op(int i, atomic_t *v)			\
 									\
 	return val;							\
 }
-
+//v和old相等则把new赋值给v，返回值是v老的置
 static inline int atomic_cmpxchg(atomic_t *v, int old, int new)
 {
 	int ret;

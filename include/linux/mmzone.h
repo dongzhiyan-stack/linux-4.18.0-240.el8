@@ -312,7 +312,9 @@ struct zone_reclaim_stat {
 	 *
 	 * The anon LRU stats live in [0], file LRU stats in [1]
 	 */
+	//这个与内存回收get_scan_count()统计scan 的page数有关
 	unsigned long		recent_rotated[2];
+    //这个与内存回收get_scan_count()统计scan 的page数有关
 	unsigned long		recent_scanned[2];
 };
 

@@ -408,7 +408,7 @@ void elv_merged_request(struct request_queue *q, struct request *rq,
 	struct elevator_queue *e = q->elevator;
 
 	if (e->type->ops.request_merged)
-		e->type->ops.request_merged(q, rq, type);
+		e->type->ops.request_merged(q, rq, type);//bfq_request_merged
 
 	if (type == ELEVATOR_BACK_MERGE)
 		elv_rqhash_reposition(q, rq);
@@ -433,7 +433,7 @@ struct request *elv_latter_request(struct request_queue *q, struct request *rq)
 	struct elevator_queue *e = q->elevator;
 
 	if (e->type->ops.next_request)
-		return e->type->ops.next_request(q, rq);
+		return e->type->ops.next_request(q, rq);//elv_rb_latter_request
 
 	return NULL;
 }

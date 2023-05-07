@@ -518,7 +518,7 @@ void blk_mq_free_request(struct request *rq)
 
 	if (rq->rq_flags & RQF_ELVPRIV) {
 		if (e && e->type->ops.finish_request)
-			e->type->ops.finish_request(rq);
+			e->type->ops.finish_request(rq);//bfq_finish_requeue_request
 		if (rq->elv.icq) {
 			put_io_context(rq->elv.icq->ioc);
 			rq->elv.icq = NULL;
@@ -693,7 +693,7 @@ void blk_mq_start_request(struct request *rq)
 	}
 
 	WARN_ON_ONCE(blk_mq_rq_state(rq) != MQ_RQ_IDLE);
-
+    //启动rq超时派发定时器
 	blk_add_timer(rq);
 	WRITE_ONCE(rq->state, MQ_RQ_IN_FLIGHT);
 
@@ -861,7 +861,7 @@ static void blk_mq_rq_timed_out(struct request *req, bool reserved)
 	if (req->q->mq_ops->timeout) {
 		enum blk_eh_timer_return ret;
 
-		ret = req->q->mq_ops->timeout(req, reserved);
+		ret = req->q->mq_ops->timeout(req, reserved);//nvme_timeout
 		if (ret == BLK_EH_DONE)
 			return;
 		WARN_ON_ONCE(ret != BLK_EH_RESET_TIMER);
@@ -873,12 +873,12 @@ static void blk_mq_rq_timed_out(struct request *req, bool reserved)
 static bool blk_mq_req_expired(struct request *rq, unsigned long *next)
 {
 	unsigned long deadline;
-
+    //如果rq已经派发完成了，rq->state由MQ_RQ_IN_FLIGHT改为MQ_RQ_IDLE，则这里直接返回false
 	if (blk_mq_rq_state(rq) != MQ_RQ_IN_FLIGHT)
 		return false;
 	if (rq->rq_flags & RQF_TIMED_OUT)
 		return false;
-
+    //rq->deadline是rq超时派发完成时间点，如果rq在rq->deadline时间点还没派发完成，该函数返回true
 	deadline = READ_ONCE(rq->deadline);
 	if (time_after_eq(jiffies, deadline))
 		return true;
@@ -920,6 +920,7 @@ static bool blk_mq_check_expired(struct blk_mq_hw_ctx *hctx,
 	 * expired; if it is not expired, then the request was completed and
 	 * reallocated as a new request.
 	 */
+    //如果rq在指定时间还没派发完成该if成立，执行rq超时派发完成异常处理
 	if (blk_mq_req_expired(rq, next))
 		blk_mq_rq_timed_out(rq, reserved);
 
@@ -954,7 +955,7 @@ static void blk_mq_timeout_work(struct work_struct *work)
 	 */
 	if (!percpu_ref_tryget(&q->q_usage_counter))
 		return;
-
+    //在这里检查哪个rq超时派发了
 	blk_mq_queue_tag_busy_iter(q, blk_mq_check_expired, &next);
 
 	if (next != 0) {

@@ -514,6 +514,7 @@ struct inode;
 /*
  * Drop a ref, return true if the refcount fell to zero (the page has no users)
  */
+ //page引用计数减1，减1后如果是0则返回true
 static inline int put_page_testzero(struct page *page)
 {
 	VM_BUG_ON_PAGE(page_ref_count(page) == 0, page);
@@ -526,6 +527,7 @@ static inline int put_page_testzero(struct page *page)
  * This can be called when MMU is off so it must not access
  * any of the virtual mappings.
  */
+//page引用计数不是0则加1并返回true。否则说明page应用计数是0，返回false，这种page已经没进程在使用了
 static inline int get_page_unless_zero(struct page *page)
 {
 	return page_ref_add_unless(page, 1, 0);

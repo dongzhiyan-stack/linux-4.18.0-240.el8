@@ -708,6 +708,7 @@ static enum elv_merge blk_try_req_merge(struct request *req,
  * For non-mq, this has to be called with the request spinlock acquired.
  * For mq with scheduling, the appropriate queue wide lock should be held.
  */
+//把next合并到req
 static struct request *attempt_merge(struct request_queue *q,
 				     struct request *req, struct request *next)
 {

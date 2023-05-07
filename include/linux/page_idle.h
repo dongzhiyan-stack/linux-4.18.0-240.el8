@@ -6,9 +6,9 @@
 #include <linux/page-flags.h>
 #include <linux/page_ext.h>
 
-#ifdef CONFIG_IDLE_PAGE_TRACKING
+#ifdef CONFIG_IDLE_PAGE_TRACKING//yes
 
-#ifdef CONFIG_64BIT
+#ifdef CONFIG_64BIT//yes
 static inline bool page_is_young(struct page *page)
 {
 	return PageYoung(page);

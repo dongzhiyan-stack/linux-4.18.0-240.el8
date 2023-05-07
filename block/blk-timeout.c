@@ -121,7 +121,7 @@ void blk_add_timer(struct request *req)
 		req->timeout = q->rq_timeout;
 
 	req->rq_flags &= ~RQF_TIMED_OUT;
-
+    //expiry是rq超时派发的时间点，系统jiffies时钟到expiry，说明rq就超时派发了
 	expiry = jiffies + req->timeout;
 	WRITE_ONCE(req->deadline, expiry);
 
@@ -144,6 +144,7 @@ void blk_add_timer(struct request *req)
 		 * will be X + something.
 		 */
 		if (!timer_pending(&q->timeout) || (diff >= HZ / 2))
+            //启动timeout定时器
 			mod_timer(&q->timeout, expiry);
 	}
 

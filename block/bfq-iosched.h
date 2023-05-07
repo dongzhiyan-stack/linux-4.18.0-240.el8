@@ -372,6 +372,7 @@ struct bfq_queue {
 	unsigned int requests_within_timer;
 
 	/* pid of the process owning the queue, used for logging purposes */
+    //如果发生rq合并，在bfq_merge_bfqqs()里赋值为-1
 	pid_t pid;//bfq_init_bfqq()中赋初值
 
 	/*
@@ -868,7 +869,7 @@ enum bfqq_state_flags {
 				 * having consumed at most 2/10 of
 				 * its budget
 				 */
-	BFQQF_in_large_burst,	/*
+	BFQQF_in_large_burst,	/*7
 				 * bfqq activated in a large burst,
 				 * see comments to bfq_handle_burst.
 				 */

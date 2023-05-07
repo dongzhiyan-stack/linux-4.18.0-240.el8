@@ -236,7 +236,7 @@ void *workingset_eviction(struct address_space *mapping, struct page *page)
 
 	lruvec = mem_cgroup_lruvec(memcg, pgdat);
 	eviction = atomic_long_inc_return(&lruvec->inactive_age);
-	return pack_shadow(memcgid, pgdat, eviction, PageWorkingset(page));
+	return pack_shadow(memcgid, pgdat, eviction, PageWorkingset(page));//shrink_active_list()ÉèÖÃpageµÄPageWorkingsetÊôĞÔ
 }
 
 /**

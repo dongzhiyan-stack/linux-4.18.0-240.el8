@@ -503,8 +503,8 @@ struct request_queue {
 	struct blk_stat_callback	*poll_cb;
 	struct blk_rq_stat	poll_stat[BLK_MQ_POLL_STATS_BKTS];
 
-	struct timer_list	timeout;
-	struct work_struct	timeout_work;
+	struct timer_list	timeout;//blk_rq_timed_out_timer
+	struct work_struct	timeout_work;//对应函数是blk_mq_timeout_work
 
 	struct list_head	icq_list;
 #ifdef CONFIG_BLK_CGROUP

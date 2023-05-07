@@ -973,6 +973,7 @@ static void bfq_update_fin_time_enqueue(struct bfq_entity *entity,
 	 * tree, then it is safe to invoke next function with the last
 	 * parameter set (see the comments on the function).
 	 */
+	//主要是根据bfqq->wr_coeff计算bfqq新的权重
 	st = __bfq_entity_update_weight_prio(st, entity, true);
     //这里简化成entity->finish=entity->start+entity->budget/entity->weight，用entity的配额得到entity->finish，注意是entity的配额
 	bfq_calc_finish(entity, entity->budget);

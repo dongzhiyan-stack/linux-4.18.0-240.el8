@@ -1106,7 +1106,7 @@ static inline int wait_on_page_bit_common(wait_queue_head_t *q,
 	int ret = 0;
 
 	if (bit_nr == PG_locked &&
-	    !PageUptodate(page) && PageWorkingset(page)) {
+	    !PageUptodate(page) && PageWorkingset(page)) {//shrink_active_list()ÉèÖÃpageµÄPageWorkingsetÊôĞÔ
 		if (!PageSwapBacked(page))
 			delayacct_thrashing_start();
 		psi_memstall_enter(&pflags);

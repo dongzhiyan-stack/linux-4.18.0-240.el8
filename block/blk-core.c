@@ -476,7 +476,7 @@ static void blk_queue_usage_counter_release(struct percpu_ref *ref)
 static void blk_rq_timed_out_timer(struct timer_list *t)
 {
 	struct request_queue *q = from_timer(q, t, timeout);
-
+    //启动worker，对应函数是blk_mq_timeout_work()
 	kblockd_schedule_work(&q->timeout_work);
 }
 

@@ -586,6 +586,7 @@ static inline int atomic_fetch_add_unless(atomic_t *v, int a, int u)
  * Atomically adds @a to @v, if @v was not already @u.
  * Returns true if the addition was done.
  */
+//v和u不相等则令v加a，然后true。v和u相等则直接返回false
 static inline bool atomic_add_unless(atomic_t *v, int a, int u)
 {
 	return atomic_fetch_add_unless(v, a, u) != u;

@@ -685,7 +685,7 @@ void migrate_page_states(struct page *newpage, struct page *page)
 		SetPageActive(newpage);
 	} else if (TestClearPageUnevictable(page))
 		SetPageUnevictable(newpage);
-	if (PageWorkingset(page))
+	if (PageWorkingset(page))//shrink_active_list()ÉèÖÃpageµÄPageWorkingsetÊôĞÔ
 		SetPageWorkingset(newpage);
 	if (PageChecked(page))
 		SetPageChecked(newpage);

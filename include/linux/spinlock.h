@@ -169,13 +169,13 @@ do {								\
 #define smp_mb__after_spinlock()	do { } while (0)
 #endif
 
-#ifdef CONFIG_DEBUG_SPINLOCK
- extern void do_raw_spin_lock(raw_spinlock_t *lock) __acquires(lock);
+#ifdef CONFIG_DEBUG_SPINLOCK//no
+ extern void do_raw_spin_lock(raw_spinlock_t *lock) __acquires(lock);//下边
 #define do_raw_spin_lock_flags(lock, flags) do_raw_spin_lock(lock)
  extern int do_raw_spin_trylock(raw_spinlock_t *lock);
  extern void do_raw_spin_unlock(raw_spinlock_t *lock) __releases(lock);
 #else
-static inline void do_raw_spin_lock(raw_spinlock_t *lock) __acquires(lock)
+static inline void do_raw_spin_lock(raw_spinlock_t *lock) __acquires(lock)//这里
 {
 	__acquire(lock);
 	arch_spin_lock(&lock->raw_lock);
@@ -430,7 +430,7 @@ static __always_inline int spin_is_locked(spinlock_t *lock)
 {
 	return raw_spin_is_locked(&lock->rlock);
 }
-
+//spin_is_contended()返回true，说明有一个进程是有lock锁，然后至少还有一个进程在等待释放锁
 static __always_inline int spin_is_contended(spinlock_t *lock)
 {
 	return raw_spin_is_contended(&lock->rlock);

@@ -154,6 +154,7 @@ static inline int page_ref_dec_return(struct page *page)
 
 static inline int page_ref_add_unless(struct page *page, int nr, int u)
 {
+    //page->_refcount和u不相等则令page->_refcount加nr，然后true。
 	int ret = atomic_add_unless(&page->_refcount, nr, u);
 
 	if (page_ref_tracepoint_active(__tracepoint_page_ref_mod_unless))
@@ -162,7 +163,7 @@ static inline int page_ref_add_unless(struct page *page, int nr, int u)
 }
 
 static inline int page_ref_freeze(struct page *page, int count)
-{
+{   //page的引用计数是count则把对page引用计数赋值0，返回值第page老的引用计数。如果page老的应用计数是count则ret是true，否则ret是false
 	int ret = likely(atomic_cmpxchg(&page->_refcount, count, 0) == count);
 
 	if (page_ref_tracepoint_active(__tracepoint_page_ref_freeze))

@@ -113,11 +113,11 @@ static __always_inline bool virt_spin_lock(struct qspinlock *lock)
  * Remapping spinlock architecture specific functions to the corresponding
  * queued spinlock functions.
  */
-#define arch_spin_is_locked(l)		queued_spin_is_locked(l)
-#define arch_spin_is_contended(l)	queued_spin_is_contended(l)
+#define arch_spin_is_locked(l)		queued_spin_is_locked(l)//这里
+#define arch_spin_is_contended(l)	queued_spin_is_contended(l)//这里
 #define arch_spin_value_unlocked(l)	queued_spin_value_unlocked(l)
-#define arch_spin_lock(l)		queued_spin_lock(l)
-#define arch_spin_trylock(l)		queued_spin_trylock(l)
+#define arch_spin_lock(l)		queued_spin_lock(l)//这里
+#define arch_spin_trylock(l)		queued_spin_trylock(l)//这里
 #define arch_spin_unlock(l)		queued_spin_unlock(l)
 
 #endif /* __ASM_GENERIC_QSPINLOCK_H */

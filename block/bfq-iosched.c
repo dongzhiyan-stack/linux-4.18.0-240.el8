@@ -3020,7 +3020,7 @@ void bfq_release_process_ref(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 
 	bfq_put_queue(bfqq);
 }
-
+//bfq IO合并流程:blk_mq_make_request->bfq_bio_merge->blk_mq_sched_try_merge->elv_merge->bfq_allow_bio_merge->bfq_merge_bfqqs
 static void
 bfq_merge_bfqqs(struct bfq_data *bfqd, struct bfq_io_cq *bic,
 		struct bfq_queue *bfqq, struct bfq_queue *new_bfqq)
@@ -5395,7 +5395,7 @@ static void bfq_exit_bfqq(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 
 	bfq_log_bfqq(bfqd, bfqq, "exit_bfqq: %p, %d", bfqq, bfqq->ref);
 
-	bfq_put_cooperator(bfqq);
+	bfq_put_cooperator(bfqq);//这里
 
 	bfq_release_process_ref(bfqd, bfqq);
 }
@@ -5412,7 +5412,7 @@ static void bfq_exit_icq_bfqq(struct bfq_io_cq *bic, bool is_sync)
 		unsigned long flags;
 
 		spin_lock_irqsave(&bfqd->lock, flags);
-		bfq_exit_bfqq(bfqd, bfqq);
+		bfq_exit_bfqq(bfqd, bfqq);//这里
 		bic_set_bfqq(bic, NULL, is_sync);
 		spin_unlock_irqrestore(&bfqd->lock, flags);
 	}
@@ -6007,6 +6007,7 @@ static void bfq_insert_request(struct blk_mq_hw_ctx *hctx, struct request *rq,
 	unsigned int cmd_flags;
 
 	spin_lock_irq(&bfqd->lock);
+    /*这里尝试把rq进行合并*/
 	if (blk_mq_sched_try_insert_merge(q, rq)) {
 		spin_unlock_irq(&bfqd->lock);
 		return;
@@ -6479,6 +6480,7 @@ static void bfq_finish_requeue_request(struct request *rq)
 					     rq->io_start_time_ns,
 					     rq->cmd_flags);
 
+    //什么情况下rq->rq_flags没有RQF_STARTED标记呢?rq被合并了按照流程blk_mq_free_request->bfq_finish_requeue_request就会执行到
 	if (likely(rq->rq_flags & RQF_STARTED)) {
 		unsigned long flags;
 

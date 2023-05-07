@@ -48,7 +48,7 @@ static void ioc_exit_icq(struct io_cq *icq)
 		return;
 
 	if (et->ops.exit_icq)
-		et->ops.exit_icq(icq);
+		et->ops.exit_icq(icq);//bfq_exit_icq
 
 	icq->flags |= ICQ_EXITED;
 }
@@ -188,7 +188,7 @@ void put_io_context_active(struct io_context *ioc)
 		if (icq->flags & ICQ_EXITED)
 			continue;
 
-		ioc_exit_icq(icq);
+		ioc_exit_icq(icq);//ÕâÀï
 	}
 	spin_unlock_irqrestore(&ioc->lock, flags);
 

@@ -872,6 +872,7 @@ static pageout_t pageout(struct page *page, struct address_space *mapping,
  * Same as remove_mapping, but if the page is removed from the mapping, it
  * gets returned with a refcount of 0.
  */
+//把page从radix tree、address_space 剔除，如果page引用计数是2则清0，返回1，page可以释放。否则page还再被其他进程使用，返回0，不能释放
 static int __remove_mapping(struct address_space *mapping, struct page *page,
 			    bool reclaimed)
 {
@@ -911,6 +912,7 @@ static int __remove_mapping(struct address_space *mapping, struct page *page,
 		refcount = 1 + HPAGE_PMD_NR;
 	else
 		refcount = 2;
+    //page应用计数是2则对page引用计数清0，并返回true，这个page可以释放了。否则/page应用计数不是2则保持引用计数并返回false，这个page不能释放
 	if (!page_ref_freeze(page, refcount))
 		goto cannot_free;
 	/* note: atomic_cmpxchg in page_freeze_refs provides the smp_rmb */
@@ -949,6 +951,7 @@ static int __remove_mapping(struct address_space *mapping, struct page *page,
 		if (reclaimed && page_is_file_cache(page) &&
 		    !mapping_exiting(mapping) && !dax_mapping(mapping))
 			shadow = workingset_eviction(mapping, page);
+        //把page从radix tree 剔除
 		__delete_from_page_cache(page, shadow);
 		xa_unlock_irqrestore(&mapping->i_pages, flags);
 
@@ -969,14 +972,17 @@ cannot_free:
  * successfully detached, return 1.  Assumes the caller has a single ref on
  * this page.
  */
+//把page从radix tree、address_space剔除。如果page没其他地方在用，设置page引用计数为1并返回1，表示page可以释放。否则返回0
 int remove_mapping(struct address_space *mapping, struct page *page)
 {
+    //把page从radix tree、address_space 剔除，如果page引用计数是2则清0，返回1，if成立
 	if (__remove_mapping(mapping, page, false)) {
 		/*
 		 * Unfreezing the refcount with 1 rather than 2 effectively
 		 * drops the pagecache ref for us without requiring another
 		 * atomic operation.
 		 */
+		//把page的引用计数再设为1，为什么?????????????????
 		page_ref_unfreeze(page, 1);
 		return 1;
 	}
@@ -1250,16 +1256,16 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 			}
 		}
 
-		if (!force_reclaim)
+		if (!force_reclaim)//检测page最近是否被访问过
 			references = page_check_references(page, sc);
 
 		switch (references) {
-		case PAGEREF_ACTIVATE:
+		case PAGEREF_ACTIVATE://page被访问过，需要再添加会acitve lru链表
 			goto activate_locked;
-		case PAGEREF_KEEP:
+		case PAGEREF_KEEP://
 			nr_ref_keep++;
 			goto keep_locked;
-		case PAGEREF_RECLAIM:
+		case PAGEREF_RECLAIM://page可以去下边进一步执行内存回收的判断代码
 		case PAGEREF_RECLAIM_CLEAN:
 			; /* try to reclaim the page below */
 		}
@@ -1327,7 +1333,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 			}
 		}
 
-		if (PageDirty(page)) {
+		if (PageDirty(page)) {//page是脏页
 			/*
 			 * Only kswapd can writeback filesystem pages
 			 * to avoid risk of stack overflow. But avoid
@@ -1338,6 +1344,8 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 			 * the rest of the LRU for clean pages and see
 			 * the same dirty pages again (PageReclaim).
 			 */
+			//1:进程不是kswapd进程触发的内存回收，if成立，禁止执行下边的pageout()刷脏页，因为函数调用调用层数很多，会导致内核栈
+			//2:系统脏页总数没超过阀值，if也成立
 			if (page_is_file_cache(page) &&
 			    (!current_is_kswapd() || !PageReclaim(page) ||
 			     !test_bit(PGDAT_DIRTY, &pgdat->flags))) {
@@ -1355,9 +1363,9 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 
 			if (references == PAGEREF_RECLAIM_CLEAN)
 				goto keep_locked;
-			if (!may_enter_fs)
+			if (!may_enter_fs)//内存回收标记没有__GFP_FS
 				goto keep_locked;
-			if (!sc->may_writepage)
+			if (!sc->may_writepage)//内存回收标志没有写脏页
 				goto keep_locked;
 
 			/*
@@ -1366,12 +1374,14 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 			 * starts and then write it out here.
 			 */
 			try_to_unmap_flush_dirty();
+            //刷脏页，里边有unlock_page
 			switch (pageout(page, mapping, sc)) {
 			case PAGE_KEEP:
 				goto keep_locked;
 			case PAGE_ACTIVATE:
 				goto activate_locked;
-			case PAGE_SUCCESS:
+			case PAGE_SUCCESS://刷脏页成功
+			    //page有writeback和dirty标记，禁止page被释放
 				if (PageWriteback(page))
 					goto keep;
 				if (PageDirty(page))
@@ -1381,12 +1391,16 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 				 * A synchronous write - probably a ramdisk.  Go
 				 * ahead and try to reclaim the page.
 				 */
+				//page重新加锁失败
 				if (!trylock_page(page))
 					goto keep;
+                //再次判断page有writeback和dirty标记，禁止page被释放，为什么又要再判断一次?上边已经判断一次了!
 				if (PageDirty(page) || PageWriteback(page))
 					goto keep_locked;
+                //再次获取page的mapping，难道pageout()刷脏页过程，page的address_space会变?
 				mapping = page_mapping(page);
-			case PAGE_CLEAN:
+                
+			case PAGE_CLEAN://page是clean的，可直接释放
 				; /* try to free the page below */
 			}
 		}
@@ -1412,11 +1426,17 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		 * process address space (page_count == 1) it can be freed.
 		 * Otherwise, leave the page on the LRU so it is swappable.
 		 */
+		//是pagecache，page有映射的bh
 		if (page_has_private(page)) {
+            //page和bh解除联系，并且令page引用计数减1
 			if (!try_to_release_page(page, sc->gfp_mask))
 				goto activate_locked;
+            
+            //page的address_space是NULL才成立
 			if (!mapping && page_count(page) == 1) {
 				unlock_page(page);
+
+                //page引用计数减1，如果是0就说明page没人用了，可以释放了
 				if (put_page_testzero(page))
 					goto free_it;
 				else {
@@ -1444,6 +1464,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 
 			count_vm_event(PGLAZYFREED);
 			count_memcg_page_event(page, PGLAZYFREED);
+        //把page从radix tree、address_space 剔除，如果page引用计数是2则清0，返回1，page可以释放。否则page还再被其他进程使用，返回0，不能释放
 		} else if (!mapping || !__remove_mapping(mapping, page, true))
 			goto keep_locked;
 
@@ -1469,22 +1490,28 @@ activate_locked:
 			try_to_free_swap(page);
 		VM_BUG_ON_PAGE(PageActive(page), page);
 		if (!PageMlocked(page)) {
+            //重新设置page active
 			SetPageActive(page);
 			pgactivate++;
+            /*page要添加到active lru链表，这里增加对应的memory cgroup中在active lru链表的page统计数-------------*/
 			count_memcg_page_event(page, PGACTIVATE);
 		}
 keep_locked:
 		unlock_page(page);
 keep:
+        //到这里，page本轮不能回收，暂存ret_pages链表然后再移回active或inactive lru链表
 		list_add(&page->lru, &ret_pages);
 		VM_BUG_ON_PAGE(PageLRU(page) || PageUnevictable(page), page);
 	}
-
+    /*要释放free_pages上的page了，增加该链表上的page有关统计数据------------*/
 	mem_cgroup_uncharge_list(&free_pages);
+    //刷tlb cache，为什么这里要有这个操作???????????
 	try_to_unmap_flush();
+    //释放free_pages上的page到伙伴系统
 	free_unref_page_list(&free_pages);
 
 	list_splice(&ret_pages, page_list);
+    /*共有pgactivate个page要添加到active lru链表，这里增加全局的在active lru链表的page统计数---------------*/
 	count_vm_events(PGACTIVATE, pgactivate);
 
 	if (stat) {
@@ -1537,6 +1564,7 @@ unsigned long reclaim_clean_pages_from_list(struct zone *zone,
  *
  * returns 0 on success, -ve errno on failure.
  */
+//page符合内存回收条件则清理page的PageLRU属性，返回0，否则返回负数
 int __isolate_lru_page(struct page *page, isolate_mode_t mode)
 {
 	int ret = -EINVAL;
@@ -1590,13 +1618,14 @@ int __isolate_lru_page(struct page *page, isolate_mode_t mode)
 
 	if ((mode & ISOLATE_UNMAPPED) && page_mapped(page))
 		return ret;
-
+    //page引用计数不是0则加1并返回true。否则说明page应用计数是0，返回false，这种page已经没进程在使用了，已经不在lRU链表了
 	if (likely(get_page_unless_zero(page))) {
 		/*
 		 * Be careful not to clear PageLRU until after we're
 		 * sure the page is not being freed elsewhere -- the
 		 * page release code relies on it.
 		 */
+		//page将要从active或inactive lru链表移除，于是清理page的PageLRU属性
 		ClearPageLRU(page);
 		ret = 0;
 	}
@@ -1664,7 +1693,7 @@ static unsigned long isolate_lru_pages(unsigned long nr_to_scan,
 	     scan < nr_to_scan && nr_taken < nr_to_scan && !list_empty(src);
 	     total_scan++) {
 		struct page *page;
-
+        //取出active或inactive lru链表尾的page，是链表尾
 		page = lru_to_page(src);
 		prefetchw_prev_lru_page(page, src, flags);
 
@@ -1683,11 +1712,13 @@ static unsigned long isolate_lru_pages(unsigned long nr_to_scan,
 		 * pages, triggering a premature OOM.
 		 */
 		scan++;
+        //page符合内存回收条件则清理page的PageLRU属性，并令page引用计数加1，返回0，否则返回负数
 		switch (__isolate_lru_page(page, mode)) {
 		case 0:
 			nr_pages = hpage_nr_pages(page);
 			nr_taken += nr_pages;
 			nr_zone_taken[page_zonenum(page)] += nr_pages;
+            //把符合内存回收条件的page移动到dst临时链表
 			list_move(&page->lru, dst);
 			break;
 
@@ -1723,6 +1754,8 @@ static unsigned long isolate_lru_pages(unsigned long nr_to_scan,
 	*nr_scanned = total_scan;
 	trace_mm_vmscan_lru_isolate(sc->reclaim_idx, sc->order, nr_to_scan,
 				    total_scan, skipped, nr_taken, mode, lru);
+    
+    //nr_zone_taken是从active或inactive lru链表隔离成功的page数，这里是令lru链表的page数减少 nr_zone_taken个，函数里边用的nr_zone_taken负数
 	update_lru_sizes(lruvec, lru, nr_zone_taken);
 	return nr_taken;
 }
@@ -1839,19 +1872,24 @@ putback_inactive_pages(struct lruvec *lruvec, struct list_head *page_list)
 		}
 
 		lruvec = mem_cgroup_page_lruvec(page, pgdat);
-
+        //page要添加到inactive lru,设置LRU属性
 		SetPageLRU(page);
 		lru = page_lru(page);
+        //把page添加到lru链表，并增加lru链表page数
 		add_page_to_lru_list(page, lruvec, lru);
 
 		if (is_active_lru(lru)) {
 			int file = is_file_lru(lru);
 			int numpages = hpage_nr_pages(page);
+            /*这个参数与计算内存回收扫描的page数有关----------------*/
 			reclaim_stat->recent_rotated[file] += numpages;
 		}
+        //page引用计数减1，减1后如果是0就说明page没人用了，可以释放了
 		if (put_page_testzero(page)) {
+            //清理page的lRU和active属性
 			__ClearPageLRU(page);
 			__ClearPageActive(page);
+            //把page从lru链表剔除，并减少lru链表的page数
 			del_page_from_lru_list(page, lruvec, lru);
 
 			if (unlikely(PageCompound(page))) {
@@ -1859,7 +1897,7 @@ putback_inactive_pages(struct lruvec *lruvec, struct list_head *page_list)
 				mem_cgroup_uncharge(page);
 				(*get_compound_page_dtor(page))(page);
 				spin_lock_irq(&pgdat->lru_lock);
-			} else
+			} else//把page再移动到pages_to_free链表，之后就直接释放掉
 				list_add(&page->lru, &pages_to_free);
 		}
 	}
@@ -1921,21 +1959,25 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 		isolate_mode |= ISOLATE_UNMAPPED;
 
 	spin_lock_irq(&pgdat->lru_lock);
-
+    
+    //根据nr_to_scan数目从inactive lru链表隔离page符合条件的page到page_list链表，同时都令这些page的引用计数加1
 	nr_taken = isolate_lru_pages(nr_to_scan, lruvec, &page_list,
 				     &nr_scanned, sc, isolate_mode, lru);
-
+    /*更新NR_ISOLATED_ANON 或 NR_ISOLATED_FILE 隔离成功的page数，增加nr_taken--------------*/
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
+    /*这个参数与计算内存回收扫描的page数有关----------------*/
 	reclaim_stat->recent_scanned[file] += nr_taken;
 
 	if (current_is_kswapd()) {
-		if (global_reclaim(sc))
+		if (global_reclaim(sc))/*增加kswap进程内存回收 扫描的page数nr_scanned统计------------*/
 			__count_vm_events(PGSCAN_KSWAPD, nr_scanned);
+        //增加kswap进程内存回收扫描的page数nr_scanned统计，cgroup有关
 		count_memcg_events(lruvec_memcg(lruvec), PGSCAN_KSWAPD,
 				   nr_scanned);
 	} else {
-		if (global_reclaim(sc))
+		if (global_reclaim(sc))/*应该是 增加直接内存回收 内存回收扫描的page数nr_scanned统计-----------*/
 			__count_vm_events(PGSCAN_DIRECT, nr_scanned);
+        //应该是 增加直接内存回收 内存回收扫描的page数nr_scanned统计，cgroup有关
 		count_memcg_events(lruvec_memcg(lruvec), PGSCAN_DIRECT,
 				   nr_scanned);
 	}
@@ -1949,25 +1991,33 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 
 	spin_lock_irq(&pgdat->lru_lock);
 
+    /*增加kswap进程内存回收 回收的page数nr_reclaimed统计，以及cgroup有关的内存回收page数nr_reclaimed统计----------*/
 	if (current_is_kswapd()) {
 		if (global_reclaim(sc))
 			__count_vm_events(PGSTEAL_KSWAPD, nr_reclaimed);
 		count_memcg_events(lruvec_memcg(lruvec), PGSTEAL_KSWAPD,
 				   nr_reclaimed);
 	} else {
+	/*增加直接内存回收 回收的page数nr_reclaimed统计，以及cgroup有关的内存回收page数nr_reclaimed统计-----------*/
 		if (global_reclaim(sc))
 			__count_vm_events(PGSTEAL_DIRECT, nr_reclaimed);
 		count_memcg_events(lruvec_memcg(lruvec), PGSTEAL_DIRECT,
 				   nr_reclaimed);
 	}
-
+    //没有成功内存回收的page再移动回 active/inactive lru链表，page引用计数减1。如果page引用计数是0说明没人用了，再移动回page_list
 	putback_inactive_pages(lruvec, &page_list);
-
+    /*更新NR_ISOLATED_ANON 或 NR_ISOLATED_FILE 隔离成功的page数，减少nr_taken-----------*/
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
 
 	spin_unlock_irq(&pgdat->lru_lock);
+    /*shrink_inactive_list函数有3出会对page引用计数有加减
+    1:isolate_lru_pages()把active lru链表上符合隔离条件的page移动到page_list链表，令这些page的引用计数加1
+    2:shrink_page_list()函数中有多处对page引用计数减
+    3:putback_inactive_pages()把回收失败的page再移动回active/inacive lru链表，令page引用计数减1
+    */
 
 	mem_cgroup_uncharge_list(&page_list);
+    //释放page_list上应用计数是0的page
 	free_unref_page_list(&page_list);
 
 	/*
@@ -2033,12 +2083,15 @@ static unsigned move_active_pages_to_lru(struct lruvec *lruvec,
 		lruvec = mem_cgroup_page_lruvec(page, pgdat);
 
 		VM_BUG_ON_PAGE(PageLRU(page), page);
+        //page要添加到active lru,设置LRU属性
 		SetPageLRU(page);
 
 		nr_pages = hpage_nr_pages(page);
+        //active lru链表的page数增加nr_pages
 		update_lru_size(lruvec, lru, page_zonenum(page), nr_pages);
+        //page添加到active lru链表
 		list_move(&page->lru, &lruvec->lists[lru]);
-
+        //page引用计数减1，如果是0就说明page没人用了，可以释放了
 		if (put_page_testzero(page)) {
 			__ClearPageLRU(page);
 			__ClearPageActive(page);
@@ -2064,7 +2117,8 @@ static unsigned move_active_pages_to_lru(struct lruvec *lruvec,
 
 	return nr_moved;
 }
-
+//从active lru尾链表扫描隔离一定数目page，符合内存回收条件的page移动到inactive lru链表头，不符合内存回收条件的再移动回active lru
+//链表头。如果这些扫描隔离的page有引用计数是0的，说明没进程使用了，直接释放掉
 static void shrink_active_list(unsigned long nr_to_scan,
 			       struct lruvec *lruvec,
 			       struct scan_control *sc,
@@ -2090,18 +2144,21 @@ static void shrink_active_list(unsigned long nr_to_scan,
 		isolate_mode |= ISOLATE_UNMAPPED;
 
 	spin_lock_irq(&pgdat->lru_lock);
-
+    //根据nr_to_scan数目从active lru链表隔离page符合条件的page到l_hold链表，同时都令这些page的引用计数加1
 	nr_taken = isolate_lru_pages(nr_to_scan, lruvec, &l_hold,
 				     &nr_scanned, sc, isolate_mode, lru);
-
+    /*更新NR_ISOLATED_ANON 或 NR_ISOLATED_FILE 隔离成功的page数，增加nr_taken个-----------------------*/
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
+    /*这个参数与计算内存回收扫描的page数有关----------------*/
 	reclaim_stat->recent_scanned[file] += nr_taken;
 
+    /*这两个统计指标应该跟全局/memcg 内存回收扫描的page数nr_scanned有关-----------------*/
 	__count_vm_events(PGREFILL, nr_scanned);
 	count_memcg_events(lruvec_memcg(lruvec), PGREFILL, nr_scanned);
 
 	spin_unlock_irq(&pgdat->lru_lock);
-
+    //遍历l_hold链表的page，最近访问过的或是保存代码数据等的page移入l_active链表，这些page不能回收.
+    //其他移入l_inactive链表，这些page要移入inactive lru链表头，下一步就可能被扫描回收
 	while (!list_empty(&l_hold)) {
 		cond_resched();
 		page = lru_to_page(&l_hold);
@@ -2133,13 +2190,15 @@ static void shrink_active_list(unsigned long nr_to_scan,
 			 * so we ignore them here.
 			 */
 			if ((vm_flags & VM_EXEC) && page_is_file_cache(page)) {
+                //最近访问过的或是保存代码数据等的page移入l_active链表，这些page不能回收
 				list_add(&page->lru, &l_active);
 				continue;
 			}
 		}
-
+        //清理page的active属性，然后还要设置page的Workingset属性，这是什么意思?
 		ClearPageActive(page);	/* we are de-activating */
 		SetPageWorkingset(page);
+        //page要移入inactive lru链表头，下一步就可能被扫描回收
 		list_add(&page->lru, &l_inactive);
 	}
 
@@ -2153,14 +2212,22 @@ static void shrink_active_list(unsigned long nr_to_scan,
 	 * helps balance scan pressure between file and anonymous pages in
 	 * get_scan_count.
 	 */
+	 
+	/*这个参数与计算内存回收扫描的page数有关----------------*/
 	reclaim_stat->recent_rotated[file] += nr_rotated;
-
+    //把l_active链表上不符合回收条件的page再移动回active lru链表头。遇到引用计数是0的page再移动回l_hold链表，
+    //这种page没人用，可以释放。这些page的引用计数都减1
 	nr_activate = move_active_pages_to_lru(lruvec, &l_active, &l_hold, lru);
+    //把l_inactive链表上的page移动回inactive lru链表头，增大inactive lru链表上的page。
+    //遇到引用计数是0的page再移动回l_hold链表，这种page没人用，可以释放。这些page的引用计数都减1
 	nr_deactivate = move_active_pages_to_lru(lruvec, &l_inactive, &l_hold, lru - LRU_ACTIVE);
+    /*更新NR_ISOLATED_ANON 或 NR_ISOLATED_FILE 隔离成功的page数，这次是减少nr_taken-----------*/
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
 	spin_unlock_irq(&pgdat->lru_lock);
+    /*上边isolate_lru_pages()隔离成功的page，引用计数都加1。接着把这些page再移动active/inactive lru链表，应用计数再减1，抵消。*/
 
 	mem_cgroup_uncharge_list(&l_hold);
+    //释放引用计数是0的page
 	free_unref_page_list(&l_hold);
 	trace_mm_vmscan_lru_shrink_active(pgdat->node_id, nr_taken, nr_activate,
 			nr_deactivate, nr_rotated, sc->priority, file);
@@ -3971,7 +4038,7 @@ static int __init kswapd_init(void)
 	int nid, ret;
 
 	swap_setup();
-	for_each_node_state(nid, N_MEMORY)
+	for_each_node_state(nid, N_MEMORY)//kswapd_run
  		kswapd_run(nid);
 	ret = cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE_DYN,
 					"mm/vmscan:online", kswapd_cpu_online,

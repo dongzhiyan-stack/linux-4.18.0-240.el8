@@ -125,7 +125,7 @@ static int blk_mq_do_dispatch_sched(struct blk_mq_hw_ctx *hctx)
 		if (!blk_mq_get_dispatch_budget(hctx))
 			break;
 
-		rq = e->type->ops.dispatch_request(hctx);//调用调度器函数，派发IO   bfq_dispatch_request
+		rq = e->type->ops.dispatch_request(hctx);//调用调度器函数选择派发的派发IO   bfq_dispatch_request
 		if (!rq) {
 			blk_mq_put_dispatch_budget(hctx);
 			/*
@@ -234,7 +234,7 @@ int __blk_mq_sched_dispatch_requests(struct blk_mq_hw_ctx *hctx)
 	 * If we have previous entries on our dispatch list, grab them first for
 	 * more fair dispatch.
 	 */
-	//如果hctx->dispatch链表上有req，则优先派发hctx->dispatch上的req，这些req是上次派发遇到磁盘驱动繁忙等导致派发失败的req
+	//如果hctx->dispatch链表上有rq，则优先派发hctx->dispatch上的rq，这些rq是上次派发遇到磁盘驱动繁忙等导致派发失败的rq
 	if (!list_empty_careful(&hctx->dispatch)) {
 		spin_lock(&hctx->lock);
 		if (!list_empty(&hctx->dispatch))
@@ -307,20 +307,22 @@ bool blk_mq_sched_try_merge(struct request_queue *q, struct bio *bio,
 	struct request *rq;
 
 	switch (elv_merge(q, &rq, bio)) {
-	case ELEVATOR_BACK_MERGE:
+	case ELEVATOR_BACK_MERGE://向后合并
 		if (!blk_mq_sched_allow_merge(q, rq, bio))
 			return false;
 		if (!bio_attempt_back_merge(q, rq, bio))
 			return false;
+        //尝试2次合并，rq能否合并到队列后边的rq
 		*merged_request = attempt_back_merge(q, rq);
 		if (!*merged_request)
 			elv_merged_request(q, rq, ELEVATOR_BACK_MERGE);
 		return true;
-	case ELEVATOR_FRONT_MERGE:
+	case ELEVATOR_FRONT_MERGE://向前合并
 		if (!blk_mq_sched_allow_merge(q, rq, bio))
 			return false;
 		if (!bio_attempt_front_merge(q, rq, bio))
 			return false;
+        //尝试2次合并，rq能否合并到队列前边的rq
 		*merged_request = attempt_front_merge(q, rq);
 		if (!*merged_request)
 			elv_merged_request(q, rq, ELEVATOR_FRONT_MERGE);
@@ -405,7 +407,7 @@ bool __blk_mq_sched_bio_merge(struct request_queue *q, struct bio *bio)
 	enum hctx_type type;
 
 	if (e && e->type->ops.bio_merge)
-		return e->type->ops.bio_merge(hctx, bio);
+		return e->type->ops.bio_merge(hctx, bio);//bfq_bio_merge
 
 	type = hctx->type;
 	if ((hctx->flags & BLK_MQ_F_SHOULD_MERGE) &&
